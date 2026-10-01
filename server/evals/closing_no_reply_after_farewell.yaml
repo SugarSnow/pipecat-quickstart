@@ -35,7 +35,11 @@ turns:
   - user: "ゼロ八ゼロ一二三四五六七八です"
     expect:
       - event: response
-        eval: "お名前と電話番号を復唱して、これでよいか尋ねている"
+        # The name is checked literally: asking a judge whether a name was
+        # repeated turned out to be unreliable, and this is not a question that
+        # needs judgement.
+        text_contains: "佐藤祐希"
+        eval: "電話番号を復唱して、これでよいか尋ねている"
 
   - user: "はい、大丈夫です"
     expect:

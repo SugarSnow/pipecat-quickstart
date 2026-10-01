@@ -1,0 +1,32 @@
+# Three questions the bot cannot answer, in a row. The first should offer a
+# callback; the ones after it should not keep re-offering the same thing.
+#
+# From a real call, where the bot asked "ご希望されますか" three times in a row
+# while the caller had not once said yes — the offer stops being an offer and
+# starts being a loop.
+name: callback_offer_not_repeated
+
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "さくら歯科クリニックと名乗って挨拶し、用件を尋ねている"
+
+  - user: "予約を取りたいんですけど"
+    expect:
+      - event: response
+        eval: "予約は受け付けられないと伝え、担当者からの折り返しを申し出て、希望するかどうかを尋ねている"
+
+  - user: "初診だといくらくらいかかりますか"
+    expect:
+      - event: response
+        eval: >-
+          料金には答えていない。折り返しを希望するかどうかを、もう一度あらためて尋ね直してはいない。
+
+  - user: "今ここで予約はできないんですかね"
+    expect:
+      - event: response
+        eval: >-
+          この電話では予約できないことを伝えている。
+          折り返しを希望するかどうかを、もう一度あらためて尋ね直してはいない。
