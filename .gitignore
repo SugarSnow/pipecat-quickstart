@@ -223,3 +223,6 @@ __marimo__/
 
 # Bot run logs (server/logs/)
 logs/
+
+# Pipecat eval run artifacts
+eval-runs/

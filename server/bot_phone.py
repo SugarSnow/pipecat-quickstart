@@ -32,6 +32,7 @@ from dotenv import load_dotenv
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
+from pipecat.evals.transport import EvalTransportParams
 from pipecat.frames.frames import LLMRunFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
@@ -89,11 +90,18 @@ SYSTEM_INSTRUCTION = f"""\
 
 【答えてはいけない内容】
 予約の受付や変更、料金、治療内容、症状の相談、その他上記3つ以外の質問には答えないでください。
-その場合は「担当者から折り返しご連絡します」と伝えて、次の折り返し案内に移ってください。
+その場合は「担当者から折り返しご連絡します」と伝え、折り返しをご希望か尋ねてください。この返答ではお名前や電話番号をまだ聞かないでください。
+希望されたら、次の折り返し案内の手順に進んでください。
+なぜ答えられないのかと尋ねられたら、この電話でご案内できるのは営業時間、休診日、場所とアクセスだけだと伝えてください。
+
+【何を聞けるかという質問】
+どんなことを聞けるのか、いま聞いてよいかという質問には、答えられないと言わずに、営業時間、休診日、場所とアクセスならこの電話でご案内できると伝えてください。
 
 【折り返し案内の手順】
 まずお名前を聞いてください。お名前を聞けたら、次に電話番号を聞いてください。必ず1つずつ順番に聞き、一度に両方を聞かないでください。
-日本の電話番号は10桁か11桁です。聞き取れた数字が10桁に満たないときは途中で区切られているので、復唱せず「はい」とだけ返して続きを待ってください。
+日本の電話番号は10桁か11桁です。聞き取れた数字が10桁に満たないときは、けっして復唱せず、数字を補って推測することもしないでください。
+そのうち、相手がまだ言い終えていない様子のとき（「ゼロハチゼロの」のように文が途中で切れているとき）は、「はい」とだけ返して続きを待ってください。
+相手が言い終えた様子なのに（「です」で終わっているなど）10桁に満たないときは、「恐れ入ります、お電話番号をもう一度最初からお願いできますか」と伝えて、最初から聞き直してください。
 電話番号を10桁か11桁まで聞けたら、お名前と電話番号を復唱し、これでよろしいでしょうかと尋ねて、相手の返事を待ってください。
 電話番号を復唱するときは、数字を1桁ずつ読点で区切ってカタカナで読んでください。たとえば ゼロ、ハチ、ゼロ、イチ、ニ、サン、ヨン、ゴ、ロク、ナナ、ハチ のように読み、かぎかっこなどの記号で番号を囲まないでください。
 復唱した返答の中で会話を終えてはいけません。復唱と「失礼いたします」を同じ返答に含めないでください。
@@ -231,6 +239,12 @@ async def bot(runner_args: RunnerArguments):
     transport_params = {
         # create_transport sets the Twilio serializer and add_wav_header automatically.
         "twilio": lambda: FastAPIWebsocketParams(
+            audio_in_enabled=True,
+            audio_out_enabled=True,
+        ),
+        # Headless scenario runs: `uv run pipecat eval suite evals/manifest.yaml`
+        # drives this over RTVI instead of a phone call. See evals/.
+        "eval": lambda: EvalTransportParams(
             audio_in_enabled=True,
             audio_out_enabled=True,
         ),

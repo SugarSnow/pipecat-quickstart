@@ -1,0 +1,25 @@
+# Out-of-scope question: offer a callback, and don't start collecting details
+# until the caller asks for one. Asking "name?" straight away is what this pins.
+name: out_of_scope_callback_offer
+
+judge: !include judge_text.yaml
+
+turns:
+  # The bot greets on connect; wait for that before speaking.
+  - expect:
+      - event: response
+        eval: "さくら歯科クリニックと名乗って挨拶し、用件を尋ねている"
+
+  - user: "駐車場ってありますか"
+    expect:
+      - event: response
+        eval: >-
+          駐車場の有無には答えず、担当者からの折り返しを申し出て、折り返しを希望するかどうかを尋ねている。
+          お名前も電話番号も、この返答では尋ねていない。
+
+  - user: "何でですか"
+    expect:
+      - event: response
+        eval: >-
+          この電話で案内できるのは営業時間、休診日、場所やアクセスだけだという趣旨を伝えている。
+          お名前も電話番号も、この返答では尋ねていない。

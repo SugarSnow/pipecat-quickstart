@@ -1,0 +1,13 @@
+# Shared judge config, !include-d by every scenario.
+#
+# Text modality: the bot skips TTS and the judge reads its LLM text — fast, silent,
+# and enough for everything these scenarios assert (what the bot decides to say).
+# Escalate a scenario to audio modality only when the audio path itself is under
+# test (pronunciation, VAD timing, how real speech transcribes).
+modality: text
+eval:
+  # The harness default is a local ollama model, which is not installed here, so
+  # the judge reuses the bot's OpenAI key. Run evals with `uv run --env-file .env`
+  # so the harness process sees OPENAI_API_KEY.
+  service: openai
+  model: gpt-4.1
