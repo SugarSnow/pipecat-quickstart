@@ -79,7 +79,7 @@ CLINIC_INFO = """\
 
 # Lines the bot must say verbatim. Kept as constants so the wording is in one
 # place, and (for the closing line) so code can recognise it.
-OUT_OF_SCOPE_LINE = "申し訳ございませんが、営業時間と場所のご案内以外はお答えいたしかねます。"
+OUT_OF_SCOPE_LINE = "申し訳ございませんが、営業時間、休診日、場所のご案内以外はお答えいたしかねます。"
 UNKNOWN_LINE = "申し訳ございませんが、その件についてはお答えいたしかねます。"
 CLOSING_LINE = "さくら歯科クリニックにお電話いただき、ありがとうございました。失礼いたします。"
 
