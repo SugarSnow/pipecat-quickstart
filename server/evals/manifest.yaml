@@ -16,6 +16,7 @@ spawn: "{python} {bot} -t eval --port {port}"
 suite:
   - bot: ../bot_phone.py
     scenarios:
+      - closing_no_reply_after_farewell
       - in_scope_answers
       - in_scope_unknown_wording
       - out_of_scope_callback_offer

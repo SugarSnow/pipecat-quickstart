@@ -1,0 +1,45 @@
+# The closing line, and that the bot adds nothing after it.
+#
+# The caller's parting "失礼します" is deliberately absent from this scenario.
+# A text-mode run cannot show what happens to it: the harness delivers a user
+# turn as an RTVI send-text, which the bot receives as an
+# LLMMessagesAppendFrame straight into its context — it never travels the
+# speech/transcription path that muting gates, so the caller would be answered
+# here while a real call stays silent. That half is covered by
+# tests/test_closing_handoff.py, which runs the real aggregator with the bot's
+# mute strategy and asserts the transcript reaches neither the context nor the
+# LLM.
+#
+# The hang-up a few seconds later is likewise out of reach here: its timer
+# starts on BotStoppedSpeakingFrame, which a text-mode run never produces
+# because the bot's TTS is skipped. It needs an audio-mode run or a real call.
+name: closing_no_reply_after_farewell
+
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "さくら歯科クリニックと名乗って挨拶し、用件を尋ねている"
+
+  - user: "折り返しの連絡をお願いしたいんですけど"
+    expect:
+      - event: response
+        eval: "お名前を尋ねている"
+
+  - user: "佐藤祐希と申します"
+    expect:
+      - event: response
+        eval: "お電話番号を尋ねている"
+
+  - user: "ゼロ八ゼロ一二三四五六七八です"
+    expect:
+      - event: response
+        eval: "お名前と電話番号を復唱して、これでよいか尋ねている"
+
+  - user: "はい、大丈夫です"
+    expect:
+      - event: response
+        text_contains: "さくら歯科クリニックにお電話いただき、ありがとうございました"
+        eval: >-
+          お礼を述べて会話を終えている。新しい質問や確認、案内を付け足していない。

@@ -33,7 +33,12 @@ from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.evals.transport import EvalTransportParams
-from pipecat.frames.frames import LLMRunFrame
+from pipecat.frames.frames import (
+    Frame,
+    LLMRunFrame,
+    TTSSpeakFrame,
+    UserIdleTimeoutUpdateFrame,
+)
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -49,6 +54,7 @@ from pipecat.services.openai.responses.llm import OpenAIResponsesLLMService
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 from pipecat.turns.user_mute import FirstSpeechUserMuteStrategy
+from pipecat.turns.user_mute.base_user_mute_strategy import BaseUserMuteStrategy
 from pipecat.turns.user_start import VADUserTurnStartStrategy
 from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
@@ -76,6 +82,66 @@ CLINIC_INFO = """\
 OUT_OF_SCOPE_LINE = "申し訳ございませんが、営業時間と場所のご案内以外はお答えいたしかねます。"
 UNKNOWN_LINE = "申し訳ございませんが、その件についてはお答えいたしかねます。"
 CLOSING_LINE = "さくら歯科クリニックにお電話いただき、ありがとうございました。失礼いたします。"
+
+# Spoken by the bot itself (not the LLM) when the caller stays on the line after
+# the closing, just before hanging up.
+FAREWELL_LINE = "それでは失礼いたします。"
+
+# How long to hold the line after the closing before hanging up.
+CLOSING_SILENCE_SECS = 3.0
+
+
+def is_closing_utterance(text: str) -> bool:
+    """Whether a finished bot turn was the closing line.
+
+    "失礼いたします" belongs to the closing line (and to the bot's own farewell)
+    and nowhere else in the prompt — the apology for a misheard number is
+    "失礼いたしました", a different word — so its presence identifies the turn
+    that ends the call.
+
+    Args:
+        text: The assistant turn's text.
+
+    Returns:
+        True when the turn ends the conversation.
+    """
+    return "失礼いたします" in text
+
+
+class ClosingUserMuteStrategy(BaseUserMuteStrategy):
+    """Mutes the caller once the bot has said its closing line.
+
+    The conversation is over at that point, so a parting "失礼します" should not
+    start another turn. Muting is the framework's own way to say that: the
+    aggregator drops the caller's speech and transcription frames while a
+    strategy reports muted, so nothing reaches the LLM and no reply is composed.
+
+    Muting the caller also makes their goodbye invisible to the idle timer, so
+    the line is hung up a fixed interval after the closing either way — which is
+    the behavior wanted here, since the only thing left to do is hang up.
+
+    The flag is set from outside (the assistant-turn handler recognises the
+    closing line), because the text the bot speaks does not pass through the
+    user aggregator this strategy is evaluated in.
+    """
+
+    def __init__(self):
+        """Initialize the strategy, unmuted."""
+        super().__init__()
+        self.closing = False
+
+    async def process_frame(self, frame: Frame) -> bool:
+        """Report whether the caller should be muted.
+
+        Args:
+            frame: The frame being evaluated (unused — the state is the flag).
+
+        Returns:
+            True once the bot has said its closing line.
+        """
+        await super().process_frame(frame)
+        return self.closing
+
 
 SYSTEM_INSTRUCTION = f"""\
 あなたは「さくら歯科クリニック」の電話受付AIです。丁寧で落ち着いた口調で応対してください。
@@ -162,6 +228,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         ),
     )
 
+    closing_mute = ClosingUserMuteStrategy()
+
     context = LLMContext()
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
@@ -189,7 +257,12 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             # Mute user input while the bot's opening greeting is playing, so a
             # false VAD trigger can't interrupt/cancel it. Released as soon as
             # that first bot speech finishes, so later turns barge-in normally.
-            user_mute_strategies=[FirstSpeechUserMuteStrategy()],
+            # closing_mute takes over at the other end of the call.
+            user_mute_strategies=[FirstSpeechUserMuteStrategy(), closing_mute],
+            # Idle detection stays off for the conversation itself: a caller who
+            # goes quiet mid-call is thinking, not finished. It is armed with a
+            # UserIdleTimeoutUpdateFrame once the closing line is spoken.
+            user_idle_timeout=0,
         ),
     )
 
@@ -230,6 +303,33 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             }
         )
         await worker.queue_frames([LLMRunFrame()])
+
+    @assistant_aggregator.event_handler("on_assistant_turn_stopped")
+    async def on_assistant_turn_stopped(aggregator, message):
+        # "失礼いたします" appears only in the closing line, so a completed turn
+        # carrying it means the conversation is over. Watching the assistant turn
+        # (rather than the text sent to the TTS) is what makes this work in both
+        # modes: a text-mode eval run skips TTS entirely, so no TTS request is
+        # ever made, but the assistant turn still closes.
+        content = message.content or ""
+        if closing_mute.closing or message.interrupted or not is_closing_utterance(content):
+            return
+        logger.info("Closing line spoken; muting caller and arming the hang-up timer")
+        closing_mute.closing = True
+        # Arming is order-independent: if the bot has already stopped speaking the
+        # timer starts now, and if it hasn't, BotStoppedSpeakingFrame starts it
+        # with this timeout. Either way the wait begins when the line ends.
+        await worker.queue_frames([UserIdleTimeoutUpdateFrame(timeout=CLOSING_SILENCE_SECS)])
+
+    @user_aggregator.event_handler("on_user_turn_idle")
+    async def on_user_turn_idle(aggregator):
+        # Only reachable in the closing state, since that is the only time the
+        # idle timeout is non-zero.
+        logger.info("Caller silent after the closing; saying goodbye and hanging up")
+        await worker.queue_frames([TTSSpeakFrame(FAREWELL_LINE)])
+        # Graceful: the queued speech is flushed before the pipeline ends, so the
+        # line is spoken in full rather than cut off.
+        await worker.stop_when_done()
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
