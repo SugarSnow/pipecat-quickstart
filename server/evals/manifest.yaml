@@ -18,6 +18,7 @@ suite:
     scenarios:
       - backchannel_stays_short
       - callback_offer_not_repeated
+      - closing_hangup_audio
       - closing_no_reply_after_farewell
       - in_scope_answers
       - in_scope_unknown_wording

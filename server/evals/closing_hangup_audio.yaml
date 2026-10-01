@@ -1,0 +1,69 @@
+# The end of the call, over real audio: the bot speaks, stops, and the silence
+# after it is what hangs up the line.
+#
+# This is the half that a text-mode run cannot reach. The hang-up timer starts on
+# BotStoppedSpeakingFrame, which only exists when the bot really produces speech,
+# and the caller's words only pass the mute gate when they arrive as transcribed
+# audio rather than as an injected text message.
+#
+# Terminal by design: the bot ends its own pipeline here, so it serves no further
+# scenario — which is fine under `pipecat eval suite`, where each scenario gets
+# its own bot.
+name: closing_hangup_audio
+
+user:
+  modality: audio
+  speech:
+    service: cartesia
+    # The bot's own voice, for want of a second Japanese one — swap in a
+    # different voice id to make the caller sound like someone else.
+    voice: 86e30c1d-714b-4074-a1f2-1cb6b552fb49
+    language: ja
+    # Telephone band, to match the bot's own pipeline: bot_phone.py pins the
+    # pipeline to 8 kHz for Twilio, and that applies to the eval transport too.
+    # Left at the harness default of 16 kHz, the caller's audio goes into an
+    # 8 kHz pipeline and the bot's STT returns nothing at all.
+    sample_rate: 8000
+
+judge: !include judge_audio.yaml
+
+turns:
+  # Criteria here judge a Whisper transcription of 8 kHz telephone-band audio, so
+  # they ask what was said, not how it was spelled: the clinic name comes back as
+  # 桜市科 about as often as さくら歯科, and a judge told to expect the exact name
+  # fails a greeting that was perfectly fine.
+  - expect:
+      - event: response
+        eval: "クリニックの名前を名乗って電話を受け、用件を尋ねている"
+
+  - user: "折り返しの連絡をお願いしたいんですけど"
+    expect:
+      - event: response
+        eval: "お名前を尋ねている"
+
+  - user: "佐藤祐希と申します"
+    expect:
+      - event: response
+        eval: "お電話番号を尋ねている"
+
+  # Dictated one digit at a time. Said as a run ("ゼロ八ゼロ一二三四五六七八"),
+  # synthesized and then heard back over an 8 kHz channel, the bot's STT returned
+  # "ゼロ八ゼロ一二三十五特殊バール" and the bot quite rightly asked for it again.
+  - user: "ゼロ、ハチ、ゼロ、イチ、ニ、サン、ヨン、ゴ、ロク、ナナ、ハチ、です"
+    expect:
+      - event: response
+        # Not "1桁ずつ": the bot does read the digits out one by one, but Whisper
+        # writes them back as "08012345678", so the judge sees a number either way.
+        eval: "電話番号を復唱して、これでよいか尋ねている"
+
+  - user: "はい、大丈夫です"
+    expect:
+      - event: response
+        eval: "お礼を述べて会話を終えている"
+
+  # No caller input: the bot has stopped speaking, so the hang-up timer is
+  # running. Three seconds later it should say goodbye on its own.
+  - expect:
+      - event: response
+        within_ms: 30000
+        eval: "ひとこと別れの挨拶をしている"
