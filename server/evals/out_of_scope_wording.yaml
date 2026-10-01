@@ -1,0 +1,18 @@
+# A request that is outside the four topics altogether (booking) takes the
+# out-of-scope refusal, verbatim, and still does not start collecting details.
+name: out_of_scope_wording
+
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "さくら歯科クリニックと名乗って挨拶し、用件を尋ねている"
+
+  - user: "予約を取りたいんですけど"
+    expect:
+      - event: response
+        text_contains: "営業時間と場所のご案内以外はお答えいたしかねます"
+        eval: >-
+          予約を受け付けておらず、担当者からの折り返しを申し出て、折り返しを希望するかどうかを尋ねている。
+          お名前も電話番号も、この返答では尋ねていない。

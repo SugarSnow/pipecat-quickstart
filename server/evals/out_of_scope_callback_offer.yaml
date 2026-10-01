@@ -10,9 +10,13 @@ turns:
       - event: response
         eval: "さくら歯科クリニックと名乗って挨拶し、用件を尋ねている"
 
+  # Parking is not in CLINIC_INFO, so it takes the "we don't have that" line —
+  # what is out of scope entirely (booking, prices) is covered by
+  # out_of_scope_wording.yaml.
   - user: "駐車場ってありますか"
     expect:
       - event: response
+        text_contains: "お答えいたしかねます"
         eval: >-
           駐車場の有無には答えず、担当者からの折り返しを申し出て、折り返しを希望するかどうかを尋ねている。
           お名前も電話番号も、この返答では尋ねていない。
