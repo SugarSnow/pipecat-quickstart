@@ -20,6 +20,11 @@ transcription:
   # Japanese bot needs a multilingual one named explicitly — as does `language`,
   # since Whisper does not auto-detect here.
   service: whisper
-  # The value WhisperSTTService's own Model.LARGE_V3_TURBO resolves to.
-  model: deepdml/faster-whisper-large-v3-turbo-ct2
+  # base, not large-v3-turbo: Whisper runs in-process, on the CPU, inside the
+  # harness. The large model took ~4s per utterance — long enough to push a
+  # scheduled caller turn past the bot's 3-second hang-up, and heavy enough that
+  # the bot's own Cartesia socket lost its keepalive under the load. Criteria here
+  # are written to tolerate a rough transcript (see below), so a small model is
+  # the right trade.
+  model: base
   language: ja

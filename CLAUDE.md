@@ -1,9 +1,13 @@
 @AGENTS.md
 ## 作業ルール
+- 作業開始時に PROGRESS.md を読み、「次にやる」の内容を確認する
+- 作業終了時に PROGRESS.md の「完了」「未検証」「次にやる」を更新する
 - VAD・ターン検出・STT/TTS/LLMモデルの設定には触れない
 - 変更方針を説明してから編集し、差分を表示
 - 変更後は server/ で uv run pytest tests と uv run --env-file .env pipecat eval suite evals/manifest.yaml を実行
 - eval は通常は全件を1回ずつ実行し、すべて合格すること
+- 全件実行には audio モードのシナリオも含まれる（約70秒・Cartesia 約205文字を消費）。テキストモードだけ回したいときは -s でシナリオを指定する
+- audio モードの判定文は文字起こしの表記に依存させない。8kHz では固有名詞が崩れ、1桁ずつ読んだ数字も数字列として書き戻される。数字の正確さも判定させない
 - -r 3 は今回追加・修正したシナリオだけに対して実行する（-s で指定）。全件の -r 3 は OpenAI の TPM 上限（30k）に当たるため実行しない
 - eval の失敗は原因で分けて報告する。判定（judge や text_contains）による失敗と、TPM 上限による失敗（応答が返らず no response text yet になる。ボットのログに Rate limit reached が出る）は区別し、後者は挙動の失敗として扱わない
 

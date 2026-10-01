@@ -46,24 +46,59 @@ turns:
       - event: response
         eval: "お電話番号を尋ねている"
 
-  # Dictated one digit at a time. Said as a run ("ゼロ八ゼロ一二三四五六七八"),
-  # synthesized and then heard back over an 8 kHz channel, the bot's STT returned
-  # "ゼロ八ゼロ一二三十五特殊バール" and the bot quite rightly asked for it again.
-  - user: "ゼロ、ハチ、ゼロ、イチ、ニ、サン、ヨン、ゴ、ロク、ナナ、ハチ、です"
+  # Grouped the way a number is actually said on the phone. Two other forms were
+  # tried first and lost digits in the 8 kHz round trip: read as one run it came
+  # back "ゼロ八ゼロ一二三十五特殊バール", and read one digit per comma it dropped
+  # the "ハチ" — in both cases the bot correctly asked for the number again, and
+  # the call never reached the closing this scenario is about.
+  - user: "ゼロハチゼロの、イチニサンヨンの、ゴロクナナハチです"
     expect:
       - event: response
-        # Not "1桁ずつ": the bot does read the digits out one by one, but Whisper
-        # writes them back as "08012345678", so the judge sees a number either way.
-        eval: "電話番号を復唱して、これでよいか尋ねている"
+        # Deliberately indifferent to the digits themselves. The bot reads them
+        # out one at a time, Whisper writes them back as a number ("08012345678",
+        # sometimes a digit short), and a judge left to its own devices starts
+        # grading the number against what the caller said. Whether the digits
+        # survived the round trip is phone_number_no_completion's business, in
+        # text mode, with no judge involved.
+        eval: >-
+          電話番号らしい数字を復唱して、これでよいか尋ねている。
+          読み上げた数字が聞き取った番号と一致しているかどうかは判断しない。
 
+  # Asserted on llm_response, not response: the closing has to resolve *before*
+  # the hang-up timer runs out, and a `response` here would wait out the ~4s
+  # Whisper pass first — by which time the line is already down and the next turn
+  # has nothing to talk to. llm_response arrives as the LLM writes it, and it
+  # carries the exact wording, so it can be checked literally.
   - user: "はい、大丈夫です"
     expect:
-      - event: response
-        eval: "お礼を述べて会話を終えている"
+      - event: llm_response
+        text_contains: "お電話いただき、ありがとうございました"
 
-  # No caller input: the bot has stopped speaking, so the hang-up timer is
-  # running. Three seconds later it should say goodbye on its own.
-  - expect:
+  # The caller says goodbye back, into the window between the bot finishing the
+  # closing line and the hang-up: measured from a passing run, the closing takes
+  # ~4.9s to speak after llm_response, and the line drops ~3s after that.
+  #
+  # The bot is muted by now, so this should reach neither the LLM nor the
+  # conversation — and `llm_response` is exactly the right thing to assert the
+  # absence of, since the goodbye the bot speaks on its way out is a
+  # TTSSpeakFrame with no LLM behind it.
+  - user: "あ、はい、失礼します"
+    send_after:
+      event: llm_response
+      delay_ms: 5500
+    expect:
+      # Nothing from the LLM: the goodbye below is a TTSSpeakFrame, so this stays
+      # true right through the hang-up.
+      # 1500ms, not longer: a reply would start inside a second (the bot's LLM
+      # answers in ~0.6s), while the goodbye's own event lands ~3s after this
+      # send — and an expectation only matches what arrives after it starts
+      # waiting, so this window has to close with room to spare before then.
+      - event: llm_response
+        absent: true
+        within_ms: 1500
+      # The goodbye the bot speaks when the timer expires, asserted in this same
+      # turn rather than a turn of its own: output that predates a turn is
+      # dropped, and this event surfaces while the turn boundary is being crossed.
       - event: response
         within_ms: 30000
         eval: "ひとこと別れの挨拶をしている"
