@@ -1,0 +1,40 @@
+# The callback request reaches record_callback, with the details the caller gave.
+#
+# The point of the scenario is the tool call, so it is asserted on the call
+# itself rather than on anything the bot says about it.
+name: callback_saved
+
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "さくら歯科クリニックと名乗って挨拶し、用件を尋ねている"
+
+  - user: "折り返しの連絡をお願いしたいんですけど"
+    expect:
+      - event: response
+        eval: "お名前を尋ねている"
+
+  - user: "佐藤祐希と申します"
+    expect:
+      - event: response
+        eval: "お電話番号を尋ねている"
+
+  - user: "ゼロ八ゼロ一二三四五六七八です"
+    expect:
+      - event: response
+        text_contains: "佐藤祐希"
+        eval: "電話番号を復唱して、これでよいか尋ねている"
+
+  - user: "はい、大丈夫です"
+    expect:
+      # Both arguments are compared literally. args is a subset check against the
+      # call's own arguments, and a judge is no use here — it only reads text the
+      # bot generated, not the arguments of a call.
+      - event: function_call
+        calls:
+          - name: record_callback
+            args: { name: "佐藤祐希", phone_number: "08012345678" }
+      - event: response
+        text_contains: "ありがとうございました"
