@@ -1,0 +1,20 @@
+# Shared judge config, !include-d by every scenario.
+#
+# Text modality: the bot skips TTS and the judge reads its LLM text — fast, silent,
+# and enough for everything these scenarios assert (what the bot decides to say).
+# Escalate a scenario to audio modality only when the audio path itself is under
+# test (pronunciation, VAD timing, how real speech transcribes).
+modality: text
+eval:
+  # The harness default is a local ollama model, which is not installed here, so
+  # the judge reuses the bot's OpenAI key. Run evals with `uv run --env-file .env`
+  # so the harness process sees OPENAI_API_KEY.
+  service: openai
+  # Deliberately not the bot's own gpt-4.1: the tokens-per-minute limit is per
+  # model, and judging every turn of every scenario on the same model as the bot
+  # overran it — the bot then returns no response and the turn times out, which
+  # reads as a behavior failure. A separate model gets its own budget.
+  # gpt-4.1-mini returned wrong verdicts on a couple of criteria (claiming a name
+  # or a digit was missing from text that contained it), so the judge runs on a
+  # larger model — still not the bot's own, to keep the two token budgets apart.
+  model: gpt-4o

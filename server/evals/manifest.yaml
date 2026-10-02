@@ -1,0 +1,27 @@
+# One bot, every scenario in this directory.
+#
+#   uv run --env-file .env pipecat eval suite evals/manifest.yaml
+#
+# The suite spawns bot_phone.py with `-t eval` per scenario, so each scenario
+# starts from a fresh context instead of inheriting the previous one's.
+# Paths resolve relative to this file.
+scenarios_dir: .
+runs_dir: eval-runs
+# Serial: the bot's LLM and the judge are both gpt-4.1 on one account, and two
+# scenarios at once overran its 30k tokens-per-minute limit (the bot then emits
+# no response and the turn times out, which reads as a behavior failure).
+concurrency: 1
+spawn: "{python} {bot} -t eval --port {port}"
+
+suite:
+  - bot: ../bot_phone.py
+    scenarios:
+      - backchannel_stays_short
+      - callback_offer_not_repeated
+      - closing_no_reply_after_farewell
+      - in_scope_answers
+      - in_scope_unknown_wording
+      - out_of_scope_callback_offer
+      - out_of_scope_wording
+      - phone_number_no_completion
+      - scope_question_not_refused

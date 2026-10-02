@@ -1,0 +1,30 @@
+# The four topics the bot exists to answer. Narrowing the refusals is what puts
+# these at risk, so they are asserted as their own scenario.
+name: in_scope_answers
+
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "さくら歯科クリニックと名乗って挨拶し、用件を尋ねている"
+
+  - user: "何時までやってますか"
+    expect:
+      - event: response
+        eval: "平日は午後6時まで、土曜は午後1時までという趣旨を答えている。断っていない"
+
+  - user: "日曜はやってますか"
+    expect:
+      - event: response
+        eval: "日曜は休診だという趣旨を答えている。断っていない"
+
+  - user: "場所はどこですか"
+    expect:
+      - event: response
+        eval: "東京都調布市小島町1丁目2番3号、さくらビル2階という住所を答えている。断っていない"
+
+  - user: "駅から何分くらいですか"
+    expect:
+      - event: response
+        eval: "京王線の調布駅中央口から徒歩5分という趣旨を答えている。断っていない"

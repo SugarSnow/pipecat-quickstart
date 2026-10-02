@@ -1,0 +1,23 @@
+# "なるほど。" is the caller acknowledging what they just heard, not a new
+# question. In a real call the bot answered it with a 51-character re-offer of
+# everything it can do, and the caller talked over it.
+name: backchannel_stays_short
+
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "さくら歯科クリニックと名乗って挨拶し、用件を尋ねている"
+
+  - user: "何時までやってますか"
+    expect:
+      - event: response
+        eval: "平日は午後6時まで、土曜は午後1時までという趣旨を答えている"
+
+  - user: "なるほど。"
+    expect:
+      - event: response
+        eval: >-
+          ひとことで短く受けている。直前に答えた営業時間を言い直しておらず、
+          案内できる話題を並べ直してもいない。

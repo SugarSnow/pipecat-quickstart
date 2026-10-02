@@ -1,0 +1,18 @@
+# A question about the clinic's hours that CLINIC_INFO simply does not answer:
+# the bot must say so in the fixed wording rather than guess a plausible answer.
+name: in_scope_unknown_wording
+
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "さくら歯科クリニックと名乗って挨拶し、用件を尋ねている"
+
+  - user: "年末年始はお休みですか"
+    expect:
+      - event: response
+        text_contains: "その件についてはお答えいたしかねます"
+        eval: >-
+          年末年始の休診について、休みだとも開いているとも答えていない。
+          推測した日付や期間も述べていない。

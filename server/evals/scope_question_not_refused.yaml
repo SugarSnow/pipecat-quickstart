@@ -1,0 +1,17 @@
+# "What else can I ask?" is a question about the scope, not an out-of-scope
+# question: answer it instead of routing the caller to a callback.
+name: scope_question_not_refused
+
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "さくら歯科クリニックと名乗って挨拶し、用件を尋ねている"
+
+  - user: "その他の質問ってどうすればいいですか。今聞いても大丈夫ですか"
+    expect:
+      - event: response
+        eval: >-
+          営業時間や場所については、この電話で答えられると伝えている。
+          答えられないという趣旨だけで終わっていない。
