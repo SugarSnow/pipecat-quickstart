@@ -27,6 +27,7 @@ Then expose it for Twilio and point a TwiML Bin's <Stream> at it::
 """
 
 import os
+from datetime import datetime
 
 from dotenv import load_dotenv
 from loguru import logger
@@ -61,6 +62,7 @@ from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
+from call_record_store import save_call_record
 from callback_store import save_callback_request
 
 load_dotenv(override=True)
@@ -223,6 +225,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             standard web/telephony pipelines don't need it.
     """
     logger.info("Starting bot")
+    started_at = datetime.now()
 
     # Speech-to-Text service
     stt = DeepgramSTTService(
@@ -394,6 +397,21 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     async def on_client_disconnected(transport, client):
         logger.info("Client disconnected")
         await worker.cancel()
+
+    @worker.event_handler("on_pipeline_finished")
+    async def on_pipeline_finished(worker, frame):
+        # Whichever way the call ended — the caller hanging up (a CancelFrame
+        # through on_client_disconnected above) or the bot hanging up after its
+        # goodbye (an EndFrame) — this runs once, at the end of both.
+        record = save_call_record(
+            context.get_messages(),
+            started_at=started_at,
+            session_id=getattr(runner_args, "session_id", None),
+        )
+        logger.info(
+            f"Call record saved: {len(record['messages'])} message(s), "
+            f"{record['started_at']} to {record['ended_at']}"
+        )
 
     runner = WorkerRunner(handle_sigint=False)
 
