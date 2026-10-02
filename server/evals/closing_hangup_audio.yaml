@@ -99,6 +99,10 @@ turns:
       # The goodbye the bot speaks when the timer expires, asserted in this same
       # turn rather than a turn of its own: output that predates a turn is
       # dropped, and this event surfaces while the turn boundary is being crossed.
+      # Checked literally. "それでは失礼いたします" was put to a judge and came
+      # back "did not provide a farewell phrase" — there is nothing here worth
+      # judging, and the one word survives the 8 kHz transcript either way
+      # (致します and いたします both keep it).
       - event: response
         within_ms: 30000
-        eval: "ひとこと別れの挨拶をしている"
+        text_contains: "失礼"
