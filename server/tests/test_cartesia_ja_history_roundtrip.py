@@ -3,7 +3,7 @@
 ``test_cartesia_ja_space_corruption.py`` shows that a half-width space inside a
 Japanese sentence corrupts the stored assistant message. The bot avoids that by
 never producing one: ``CLINIC_INFO`` is written without spaces, and
-``SYSTEM_INSTRUCTION`` forbids them mid-sentence.
+``ROLE_MESSAGE`` forbids them mid-sentence.
 
 These tests hold both ends of that: the constants really are space-free, and the
 sentences the bot is expected to speak round-trip under every Cartesia message
@@ -13,7 +13,7 @@ boundary.
 import pytest
 from cartesia_history_sim import failing_chunkings, history_for, isolates_final_mark
 
-from bot_phone import CLINIC_INFO, SYSTEM_INSTRUCTION
+from bot_phone import CLINIC_INFO, ROLE_MESSAGE
 
 # Answers the bot gives from CLINIC_INFO, phrased as the prompt asks for them
 # (one or two spoken sentences, no symbols).
@@ -40,9 +40,10 @@ def test_clinic_info_has_no_half_width_space():
     assert " " not in CLINIC_INFO
 
 
-def test_system_instruction_forbids_mid_sentence_spaces():
-    assert "文の途中に半角スペースを入れないでください" in SYSTEM_INSTRUCTION
-    assert "姓と名の間にスペースを入れず" in SYSTEM_INSTRUCTION
+def test_the_role_message_forbids_mid_sentence_spaces():
+    """In ROLE_MESSAGE, which is the one instruction every node inherits."""
+    assert "文の途中に半角スペースを入れないでください" in ROLE_MESSAGE
+    assert "姓と名の間にスペースを入れず" in ROLE_MESSAGE
 
 
 @pytest.mark.parametrize("sentence", CLINIC_ANSWERS + CALLBACK_CONFIRMATIONS)

@@ -32,6 +32,25 @@
   到達しない場合は、残っている `bot_phone.py` と `pipecat eval` のプロセスを落とし、
   数分おいてから実行し直す
 
+## Pipecat Flows
+
+- Flows は pipecat 1.8.1 に同梱されている（`pipecat.flows`）。別パッケージの
+  `pipecat-ai-flows` は不要で、入れると pipecat 自身が警告する。しかも最新の
+  1.4.0 は `pipecat-ai<1.5.0` を要求するので入れてはいけない
+- プロバイダ別のアダプタはない（universal context 前提）。OpenAI Responses でそのまま動く
+- `FlowManager(context_aggregator=...)` には `LLMContextAggregatorPair`
+  そのものを渡す（`.user()` と `.assistant()` を呼ぶため）。パイプラインには
+  分解した2つを渡す
+- 直接関数は第1引数が `flow_manager`、戻り値は `(結果, 次のノード)`。
+  `result_callback` は使わない
+- ノードの `role_message` が system instruction になる。次のノードが指定しない限り
+  そのまま残るので、LLM サービス側の `system_instruction` は空にしておく
+- ノード遷移を伴う関数呼び出しの返答は、関数呼び出しの前後で2つに分かれる。
+  eval の `eval:` 判定は最初の断片で「いいえ」が出た時点で失敗するため、
+  遷移時は何も喋らせない（プロンプトで「関数を呼ぶだけ」と明示する）
+- 既定の context strategy は APPEND なので、遷移しても前のノードの task messages は
+  コンテキストに残る。ノードを分けてもトークンが単純に減るとは限らない
+
 ## 通話が終わったときの後始末
 
 - `on_pipeline_finished` は終わり方によらず1回だけ走る。発信者が切った場合
