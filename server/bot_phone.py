@@ -79,8 +79,11 @@ CLINIC_INFO = """\
 
 # Lines the bot must say verbatim. Kept as constants so the wording is in one
 # place, and (for the closing line) so code can recognise it.
-OUT_OF_SCOPE_LINE = "申し訳ございませんが、営業時間、休診日、場所のご案内以外はお答えいたしかねます。"
+OUT_OF_SCOPE_LINE = (
+    "申し訳ございませんが、営業時間、休診日、場所のご案内以外はお答えいたしかねます。"
+)
 UNKNOWN_LINE = "申し訳ございませんが、その件についてはお答えいたしかねます。"
+CALLBACK_OFFER_LINE = "担当者から折り返しご連絡することもできますが、いかがなさいますか。"
 CLOSING_LINE = "さくら歯科クリニックにお電話いただき、ありがとうございました。失礼いたします。"
 
 # Spoken by the bot itself (not the LLM) when the caller stays on the line after
@@ -160,16 +163,18 @@ SYSTEM_INSTRUCTION = f"""\
 {CLINIC_INFO}
 休診日やアクセスを尋ねられたときも、このクリニック情報に書かれているとおりに答えてください。
 このクリニック情報に書かれていないことは、たとえ営業時間や場所に関する話題であっても、推測で答えてはいけません。
-その場合は「{UNKNOWN_LINE}」とそのまま伝えてください。この電話でまだ折り返しをご案内していなければ、続けて担当者から折り返しご連絡しますと伝えて、折り返しをご希望か尋ねてください。この返答ではお名前や電話番号をまだ聞かないでください。
+その場合は「{UNKNOWN_LINE}」とそのまま伝えてください。この電話でまだ折り返しをご案内していなければ、続けて「{CALLBACK_OFFER_LINE}」とそのまま伝えてください。この返答ではお名前や電話番号をまだ聞かないでください。
 駐車場や設備のように、クリニック情報に書かれていない施設のことを尋ねられたときも、この文言で答えてください。
+年末年始やお盆のように、クリニック情報に書かれていない日付や期間について尋ねられたときは、営業時間や休診日の情報で代わりに答えてはいけません。この文言で答えてください。
 
 【答えてはいけない内容】
 予約の受付や変更、料金、治療内容、症状の相談、その他上記4つ以外の質問には答えないでください。
-その場合は「{OUT_OF_SCOPE_LINE}」とそのまま伝えてください。この電話でまだ折り返しをご案内していなければ、続けて担当者から折り返しご連絡しますと伝えて、折り返しをご希望か尋ねてください。この返答ではお名前や電話番号をまだ聞かないでください。
+その場合は「{OUT_OF_SCOPE_LINE}」とそのまま伝えてください。この電話でまだ折り返しをご案内していなければ、続けて「{CALLBACK_OFFER_LINE}」とそのまま伝えてください。この返答ではお名前や電話番号をまだ聞かないでください。
 なぜ答えられないのかと尋ねられたら、この電話でご案内できるのは営業時間、休診日、場所とアクセスだけだと伝えてください。
 
 【折り返しのご案内は一度だけ】
-折り返しのご案内は、1回の電話の中で一度だけです。一度ご案内したあとは、答えられないことが続いても、断りの文言を伝えるだけにして、折り返しをご希望かどうかを二度と尋ねないでください。
+折り返しのご案内は、1回の電話の中で一度だけです。一度ご案内したあとは、答えられないことが続いても、断りの文言だけで返答を終えてください。
+2回目以降は「{CALLBACK_OFFER_LINE}」と言ってはいけません。「いかがなさいますか」と尋ね直すこともしないでください。
 相手が折り返しを希望すると言ったときだけ、下の折り返し案内の手順に進んでください。
 
 【何を聞けるかという質問】
@@ -233,6 +238,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     )
 
     closing_mute = ClosingUserMuteStrategy()
+    hanging_up = False
 
     context = LLMContext()
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
@@ -329,8 +335,21 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     async def on_user_turn_idle(aggregator):
         # Only reachable in the closing state, since that is the only time the
         # idle timeout is non-zero.
+        #
+        # Once, though: the goodbye below is itself bot speech, so the caller goes
+        # quiet after it too and the timer arms again. Whether that second firing
+        # gets as far as speaking depends on how long the pipeline takes to end —
+        # a race that would have the bot say goodbye twice.
+        nonlocal hanging_up
+        if hanging_up:
+            return
+        hanging_up = True
         logger.info("Caller silent after the closing; saying goodbye and hanging up")
-        await worker.queue_frames([TTSSpeakFrame(FAREWELL_LINE)])
+        # Turn the timer off as well, so nothing is left armed while the pipeline
+        # drains.
+        await worker.queue_frames(
+            [UserIdleTimeoutUpdateFrame(timeout=0), TTSSpeakFrame(FAREWELL_LINE)]
+        )
         # Graceful: the queued speech is flushed before the pipeline ends, so the
         # line is spoken in full rather than cut off.
         await worker.stop_when_done()

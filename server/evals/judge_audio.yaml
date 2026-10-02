@@ -1,0 +1,30 @@
+# Shared audio-mode judge config, the counterpart to judge_text.yaml.
+#
+# Audio modality makes the bot actually speak: the harness records what comes out
+# of the pipeline, transcribes it, and judges that transcription. So this is the
+# only way to see the parts of the call that live in the audio path — real VAD and
+# STT on the caller's side, and anything driven by the bot finishing its speech
+# (the hang-up timer, for one).
+#
+# Slower and not free: every turn costs a Cartesia synthesis for the caller's
+# voice plus a local Whisper pass over the bot's reply. Keep it for the scenarios
+# that need it and leave the rest on judge_text.yaml.
+modality: audio
+
+eval:
+  service: openai
+  model: gpt-4o
+
+transcription:
+  # Local, no API key. Whisper's own default model is English-only, so a
+  # Japanese bot needs a multilingual one named explicitly — as does `language`,
+  # since Whisper does not auto-detect here.
+  service: whisper
+  # base, not large-v3-turbo: Whisper runs in-process, on the CPU, inside the
+  # harness. The large model took ~4s per utterance — long enough to push a
+  # scheduled caller turn past the bot's 3-second hang-up, and heavy enough that
+  # the bot's own Cartesia socket lost its keepalive under the load. Criteria here
+  # are written to tolerate a rough transcript (see below), so a small model is
+  # the right trade.
+  model: base
+  language: ja

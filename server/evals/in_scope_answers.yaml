@@ -17,7 +17,7 @@ turns:
   - user: "日曜はやってますか"
     expect:
       - event: response
-        eval: "日曜は休診だという趣旨を答えている。断っていない"
+        eval: "日曜は診療していないと答えている"
 
   - user: "場所はどこですか"
     expect:
