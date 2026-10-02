@@ -50,6 +50,7 @@ from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
 from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService
+from pipecat.services.llm_service import FunctionCallParams
 from pipecat.services.openai.responses.llm import OpenAIResponsesLLMService
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
@@ -59,6 +60,8 @@ from pipecat.turns.user_start import VADUserTurnStartStrategy
 from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
+
+from callback_store import save_callback_request
 
 load_dotenv(override=True)
 
@@ -109,6 +112,18 @@ def is_closing_utterance(text: str) -> bool:
         True when the turn ends the conversation.
     """
     return "失礼いたします" in text
+
+
+async def record_callback(params: FunctionCallParams, name: str, phone_number: str):
+    """折り返しのご依頼を記録します。復唱して確認が取れたあとに呼んでください。
+
+    Args:
+        name: 相手のお名前。復唱して確認が取れたもの。
+        phone_number: 相手の電話番号。数字だけで渡してください。例: 08012345678
+    """
+    record = save_callback_request(name, phone_number)
+    logger.info(f"Callback request saved: {record}")
+    await params.result_callback({"saved": True})
 
 
 class ClosingUserMuteStrategy(BaseUserMuteStrategy):
@@ -189,7 +204,7 @@ SYSTEM_INSTRUCTION = f"""\
 復唱は「佐藤様、お電話番号はゼロ、ハチ、ゼロ、イチ、ニ、サン、ヨン、ゴ、ロク、ナナ、ハチ、でよろしいでしょうか」のように、お名前から始めて電話番号を続ける形にしてください。電話番号だけの復唱にしないでください。
 電話番号を復唱するときは、数字を1桁ずつ読点で区切ってカタカナで読んでください。たとえば ゼロ、ハチ、ゼロ、イチ、ニ、サン、ヨン、ゴ、ロク、ナナ、ハチ のように読み、かぎかっこなどの記号で番号を囲まないでください。
 復唱した返答の中で会話を終えてはいけません。復唱と終話の挨拶を同じ返答に含めないでください。
-相手が「はい」などと肯定したら、その次の返答では「{CLOSING_LINE}」とだけ言って会話を終えてください。
+相手が「はい」などと肯定したら、まず record_callback にお名前と電話番号を渡して記録してください。電話番号は数字だけにしてください。記録できたら「{CLOSING_LINE}」とだけ言って会話を終えてください。
 相手が「違います」などと否定したら、「失礼いたしました、もう一度お電話番号をお願いできますか」の1文だけを返してください。確認の言葉を何度も繰り返さないでください。聞き直した番号は、上と同じ手順で一度だけ復唱してください。
 
 【聞き取れないとき】
@@ -240,7 +255,9 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     closing_mute = ClosingUserMuteStrategy()
     hanging_up = False
 
-    context = LLMContext()
+    # The tool registers itself from here: its name, typed signature and
+    # docstring become the schema the LLM sees.
+    context = LLMContext(tools=[record_callback])
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(

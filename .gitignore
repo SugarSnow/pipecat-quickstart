@@ -226,3 +226,6 @@ logs/
 
 # Pipecat eval run artifacts
 eval-runs/
+
+# Saved callback requests and call records
+data/

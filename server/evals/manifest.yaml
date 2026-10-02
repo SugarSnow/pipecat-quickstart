@@ -11,12 +11,15 @@ runs_dir: eval-runs
 # scenarios at once overran its 30k tokens-per-minute limit (the bot then emits
 # no response and the turn times out, which reads as a behavior failure).
 concurrency: 1
-spawn: "{python} {bot} -t eval --port {port}"
+# CALLBACK_LOG_PATH keeps the requests these runs record out of the file real
+# calls append to, so a phone test can be read without eval traffic mixed in.
+spawn: "env CALLBACK_LOG_PATH=data/callbacks.eval.jsonl {python} {bot} -t eval --port {port}"
 
 suite:
   - bot: ../bot_phone.py
     scenarios:
       - backchannel_stays_short
+      - callback_saved
       - callback_offer_not_repeated
       - closing_hangup_audio
       - closing_no_reply_after_farewell
