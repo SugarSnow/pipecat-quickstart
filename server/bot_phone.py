@@ -249,10 +249,22 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             # incomplete: 9 EndOfTurnState.INCOMPLETE in one call, twice still
             # INCOMPLETE after 3s of silence, one turn left the user hanging
             # for ~23s. Falling back to a plain VAD stop_secs-based stop.
-            # stop_secs=1.0: 0.7 still got run over by the pause inside
-            # "〜なんですけれども(pause)"; widened further since this stop
-            # strategy has no smart-turn-style disfluency tolerance.
-            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=1.0)),
+            #
+            # stop_secs + user_speech_timeout (below) is both how long the bot
+            # waits before answering *and* how long a mid-sentence pause may run
+            # before the turn is cut: the two timers are in series, and a caller
+            # who resumes inside the second one has all progress discarded. It
+            # was 1.0 + 0.6, which measured ~2.2s from speech end to the bot's
+            # first audio — 1.6s of it this pair. Now 0.2 + 0.8, for 1.0s.
+            #
+            # 0.2 for the VAD specifically, rather than keeping the wait here:
+            # the strategy's third timer waits out the STT's final transcript
+            # for max(0, p99 - stop_secs), and Deepgram's p99 is 0.35s, so any
+            # stop_secs at or above that collapses the wait to zero and lets a
+            # turn end on a transcript that is still arriving. Calls at 1.0 show
+            # exactly that — "何時まで?", "駐車場っあります?", "今日っ" — and it
+            # costs nothing to fix, since 0.15s runs inside the 0.8s below.
+            vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
             user_turn_strategies=UserTurnStrategies(
                 # VAD-only start: TranscriptionUserTurnStartStrategy (the other
                 # default) fires trigger_user_turn_started() — which broadcasts
@@ -262,7 +274,14 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
                 # still broadcasts an interruption on VADUserStartedSpeakingFrame
                 # (enable_interruptions defaults to True), so barge-in is unaffected.
                 start=[VADUserTurnStartStrategy()],
-                stop=[SpeechTimeoutUserTurnStopStrategy()],
+                # 0.8 rather than the default 0.6: this is the half of the wait
+                # a caller can still interrupt, so the 0.8s the VAD gave up above
+                # is better spent here. A 1.4s pause mid-sentence was measured in
+                # one call out of nine turns, which 1.0s does not cover — the
+                # turn is cut and the rest of the sentence arrives as a new one.
+                # Acceptable now that the prompt answers a half-heard phone
+                # number with "はい" and waits for the rest.
+                stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.8)],
             ),
             # Mute user input while the bot's opening greeting is playing, so a
             # false VAD trigger can't interrupt/cancel it. Released as soon as
