@@ -34,7 +34,12 @@ from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.evals.transport import EvalTransportParams
-from pipecat.flows import ConsolidatedFunctionResult, FlowManager, NodeConfig
+from pipecat.flows import (
+    ConsolidatedFunctionResult,
+    FlowManager,
+    NodeConfig,
+    flows_tool_options,
+)
 from pipecat.frames.frames import Frame, TTSSpeakFrame, UserIdleTimeoutUpdateFrame
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
@@ -202,30 +207,54 @@ start_callback を呼ぶときは、その返答では何も言わないでく�
 CALLBACK_TASK = f"""\
 【折り返しのご依頼を受け付ける】
 まずお名前を聞いてください。お名前を聞けたら、次に電話番号を聞いてください。必ず1つずつ順番に聞き、一度に両方を聞かないでください。
-日本の電話番号は10桁か11桁です。聞き取れた数字が10桁に満たないときは、けっして復唱せず、数字を補って推測することもしないでください。
+
+【電話番号の聞き取り】
+日本の電話番号は10桁か11桁です。復唱する前に、これまでに聞き取れた数字の桁数を必ず数えてください。
+10桁に満たないときは、けっして復唱してはいけません。足りない桁を補ったり、同じ数字を繰り返して桁を埋めたりするのも禁止です。
 そのうち、相手がまだ言い終えていない様子のとき（「ゼロハチゼロの」のように文が途中で切れているとき）は、「はい」とだけ返して続きを待ってください。
 相手が言い終えた様子なのに（「です」で終わっているなど）10桁に満たないときは、「恐れ入ります、お電話番号をもう一度最初からお願いできますか」と伝えて、最初から聞き直してください。
-電話番号を10桁か11桁まで聞けたら、お名前と電話番号を復唱し、これでよろしいでしょうかと尋ねて、相手の返事を待ってください。
+
+【復唱して確認する返答】
+電話番号を10桁か11桁まで聞けたら、お名前と電話番号を復唱し、これでよろしいでしょうかと尋ねてください。
 復唱は「佐藤様、お電話番号はゼロ、ハチ、ゼロ、イチ、ニ、サン、ヨン、ゴ、ロク、ナナ、ハチ、でよろしいでしょうか」のように、お名前から始めて電話番号を続ける形にしてください。電話番号だけの復唱にしないでください。
 電話番号を復唱するときは、数字を1桁ずつ読点で区切ってカタカナで読んでください。たとえば ゼロ、ハチ、ゼロ、イチ、ニ、サン、ヨン、ゴ、ロク、ナナ、ハチ のように読み、かぎかっこなどの記号で番号を囲まないでください。
-復唱した返答の中で会話を終えてはいけません。復唱と終話の挨拶を同じ返答に含めないでください。
-相手が「はい」などと肯定したら、record_callback にお名前と電話番号を渡して記録してください。電話番号は数字だけにしてください。
-相手が「違います」などと否定したら、「失礼いたしました、もう一度お電話番号をお願いできますか」の1文だけを返してください。確認の言葉を何度も繰り返さないでください。聞き直した番号は、上と同じ手順で一度だけ復唱してください。
+この返答はここで終わりです。record_callback は呼ばず、終話の挨拶も言わず、相手の返事を待ってください。
+
+【相手が肯定したとき】
+復唱に対して相手が「はい」などと肯定したら、その次の返答で record_callback を呼んでください。
+渡すお名前と電話番号は、いちばん最後に復唱した内容にしてください。途中で聞き直したときは、古い方ではなく新しい方を渡してください。電話番号は数字だけにしてください。
+record_callback を呼ばずに会話を終えてはいけません。
+
+【相手が否定したとき】
+「違います」などと否定されたら、どちらが違うのかを聞き分けて、違うと言われた方だけを聞き直してください。
+お名前が違うと言われたら「失礼いたしました、もう一度お名前をお願いできますか」の1文だけを返してください。
+電話番号が違うと言われたときや、どちらが違うのか分からないときは「失礼いたしました、もう一度お電話番号をお願いできますか」の1文だけを返してください。
+確認の言葉を何度も繰り返さないでください。
+聞き直さなかった方はすでに聞けているので、もう一度尋ねないでください。
+聞き直した方を聞けたら、お名前と電話番号の両方をもう一度復唱して、これでよろしいでしょうかと尋ねてください。この返答でも record_callback は呼ばず、終話の挨拶も言わず、相手の返事を待ってください。2回目、3回目の復唱でも同じです。
+肯定が返ってくるまで record_callback を呼んではいけません。復唱は何回でも、肯定は必ず1回必要です。
 """
 
 # The last thing on the line.
 CLOSING_TASK = f"""\
 【終話】
-「{CLOSING_LINE}」とだけ言ってください。ほかのことは何も言わず、新しい質問も確認もしないでください。
+「{CLOSING_LINE}」とだけ言ってください。
+この文言の前に相槌やお礼を付けないでください。「はい」「ありがとうございます」などを先に言ってはいけません。この文言の後にも何も言わないでください。新しい質問も確認もしないでください。
 """
 
 
+# Each node's procedure goes in its role_message — the system instruction —
+# rather than in task_messages. As a developer message inside the context it was
+# followed loosely: the bot would read a number back and record it in the same
+# turn, however plainly the text said to wait. It also stacked up, since the
+# default APPEND strategy leaves the previous node's task messages in the
+# context; a role_message is replaced on each transition instead.
 def reception_node() -> NodeConfig:
     """The node the call starts in: 用件確認 and, in the same breath, 案内 and 断り."""
     return {
         "name": "reception",
-        "role_message": ROLE_MESSAGE,
-        "task_messages": [{"role": "developer", "content": RECEPTION_TASK}],
+        "role_message": ROLE_MESSAGE + RECEPTION_TASK,
+        "task_messages": [{"role": "developer", "content": "ご用件を伺ってください。"}],
         "functions": [start_callback],
     }
 
@@ -234,7 +263,10 @@ def callback_node() -> NodeConfig:
     """折り返し受付: the caller has asked to be called back."""
     return {
         "name": "callback",
-        "task_messages": [{"role": "developer", "content": CALLBACK_TASK}],
+        "role_message": ROLE_MESSAGE + CALLBACK_TASK,
+        "task_messages": [
+            {"role": "developer", "content": "折り返しのご依頼を受け付けてください。"}
+        ],
         "functions": [record_callback],
     }
 
@@ -243,17 +275,26 @@ def closing_node() -> NodeConfig:
     """終話: say the closing line, and nothing else."""
     return {
         "name": "closing",
-        "task_messages": [{"role": "developer", "content": CLOSING_TASK}],
+        "role_message": ROLE_MESSAGE + CLOSING_TASK,
+        "task_messages": [{"role": "developer", "content": "終話の挨拶をしてください。"}],
         "functions": [],
     }
 
 
+# Flows registers its functions with cancel_on_interruption=False, which makes
+# them async tools: the aggregators then write the async-tool protocol into the
+# context — an ASYNC TOOLS instruction block plus a started and a final message
+# per call — and it is all re-sent on every turn afterwards. Both of these
+# functions return immediately (one swaps a node, the other appends a line to a
+# file), so there is nothing to keep running across an interruption.
+@flows_tool_options(cancel_on_interruption=True)
 async def start_callback(flow_manager: FlowManager) -> ConsolidatedFunctionResult:
     """折り返しのご依頼を受け付けます。相手が折り返しを希望したときに呼んでください。"""
     logger.info("Caller asked for a callback; moving to the callback node")
     return None, callback_node()
 
 
+@flows_tool_options(cancel_on_interruption=True)
 async def record_callback(
     flow_manager: FlowManager, name: str, phone_number: str
 ) -> ConsolidatedFunctionResult:

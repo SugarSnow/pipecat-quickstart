@@ -36,5 +36,10 @@ turns:
         calls:
           - name: record_callback
             args: { name: "佐藤祐希", phone_number: "08012345678" }
+      # The closing line, and only the closing line: a phone test caught
+      # "はい、ありがとうございます。" being tacked on in front of it.
       - event: response
-        text_contains: "ありがとうございました"
+        text_contains: "さくら歯科クリニックにお電話いただき、ありがとうございました"
+        eval: >-
+          終話の挨拶だけを述べている。その前に「はい」「ありがとうございます」のような
+          相槌やお礼を付け足していない。

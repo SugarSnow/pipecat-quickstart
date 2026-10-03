@@ -19,6 +19,7 @@ suite:
   - bot: ../bot_phone.py
     scenarios:
       - backchannel_stays_short
+      - callback_name_correction
       - callback_saved
       - callback_offer_not_repeated
       - closing_hangup_audio
