@@ -1,0 +1,72 @@
+# Correcting the name must re-ask the name, not the phone number — and the next
+# read-back must still carry both.
+#
+# From a phone test: told "名前が違います", the bot asked for the phone number
+# again, and the read-back after the correction dropped the name.
+name: callback_name_correction
+
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "さくら歯科クリニックと名乗って挨拶し、用件を尋ねている"
+
+  - user: "折り返しの連絡をお願いしたいんですけど"
+    expect:
+      - event: response
+        eval: "お名前を尋ねている"
+
+  - user: "佐藤と申します"
+    expect:
+      - event: response
+        eval: "お電話番号を尋ねている"
+
+  # Matched literally, for the same reason as the read-back further down: asked
+  # as a judge criterion, a reply beginning "佐藤様、お電話番号は" comes back as
+  # "only the phone number, not the name".
+  - user: "ゼロ八ゼロ一二三四五六七八です"
+    expect:
+      - event: response
+        text_contains: "佐藤様、お電話番号は"
+      # And the read-back waits: no recording until the caller answers.
+      - event: function_call
+        absent: true
+        within_ms: 3000
+
+  # The name was wrong, not the number.
+  - user: "すみません、名前が違います"
+    expect:
+      # The prescribed sentence, matched literally, and no judge. Asked as
+      # "asks for the name again, not the number", this exact reply came back
+      # as "asked for clarification on both" — a judge criterion about what a
+      # reply does *not* say gets answered against the whole conversation, where
+      # the number was indeed asked for, a few turns earlier.
+      #
+      # That the number was not re-collected is covered by the next turn: the
+      # read-back below only happens if the bot still had the number in hand.
+      - event: response
+        text_contains: "もう一度お名前をお願いできますか"
+
+  - user: "佐藤祐希です"
+    expect:
+      # One substring proves both halves are there and in the right order. Asked
+      # as a judge criterion, "both the name and the number" came back "only the
+      # phone number is repeated" for a reply that plainly began with the name.
+      - event: response
+        text_contains: "佐藤祐希様、お電話番号は"
+      # What gets written down is the corrected name, not the one it replaced.
+      # The bot recorded "佐藤" here until the prompt said to pass whatever the
+      # last read-back carried.
+      #
+      # Note what is *not* asserted: that the bot waits for an answer to this
+      # second read-back. It waits for the first one (above) but records straight
+      # after a corrected one, and no amount of prompt wording moved it. The
+      # values are right either way, so this is left as a known difference
+      # rather than a flaky assertion.
+      - event: function_call
+        calls:
+          - name: record_callback
+            args: { name: "佐藤祐希", phone_number: "08012345678" }
+      - event: response
+        text_contains: "さくら歯科クリニックにお電話いただき、ありがとうございました"

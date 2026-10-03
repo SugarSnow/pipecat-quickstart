@@ -13,7 +13,11 @@
   「no response text yet」でタイムアウトするため判定の失敗と見分けづらい。ボット側の
   ログに「Rate limit reached」が出ていればこれ
 - 判定に迷いの要らないこと（定型文言、固有名詞、別れの挨拶）は judge ではなく
-  `text_contains` で見る。gpt-4o でも誤判定する
+  `text_contains` で見る。gpt-4o でも誤判定する。「佐藤様、お電話番号は…」で
+  始まる返答を「電話番号しか復唱していない」と判定した例が何度もある
+- 「○○と言っていない」という否定の判定文は judge に渡さない。返答単体ではなく
+  会話全体に対して判定されるため、以前のターンで言っていると落ちる。
+  言うべきことを `text_contains` で見るか、後続のターンの挙動で担保する
 - 期待は「待ち始めたあとに届いたイベント」しか拾わない。切電前後のようにイベントが
   数秒遅れて出る場面では、ターンを分けずに同じターンで順に検証する
 
@@ -31,6 +35,33 @@
 - Cartesia の接続が不安定なことがある。ボットが起動時に再接続を繰り返して Bot ready に
   到達しない場合は、残っている `bot_phone.py` と `pipecat eval` のプロセスを落とし、
   数分おいてから実行し直す
+
+## Pipecat Flows
+
+- Flows は pipecat 1.8.1 に同梱されている（`pipecat.flows`）。別パッケージの
+  `pipecat-ai-flows` は不要で、入れると pipecat 自身が警告する。しかも最新の
+  1.4.0 は `pipecat-ai<1.5.0` を要求するので入れてはいけない
+- プロバイダ別のアダプタはない（universal context 前提）。OpenAI Responses でそのまま動く
+- `FlowManager(context_aggregator=...)` には `LLMContextAggregatorPair`
+  そのものを渡す（`.user()` と `.assistant()` を呼ぶため）。パイプラインには
+  分解した2つを渡す
+- 直接関数は第1引数が `flow_manager`、戻り値は `(結果, 次のノード)`。
+  `result_callback` は使わない
+- ノードの `role_message` が system instruction になる。次のノードが指定しない限り
+  そのまま残るので、LLM サービス側の `system_instruction` は空にしておく
+- ノード遷移を伴う関数呼び出しの返答は、関数呼び出しの前後で2つに分かれる。
+  eval の `eval:` 判定は最初の断片で「いいえ」が出た時点で失敗するため、
+  遷移時は何も喋らせない（プロンプトで「関数を呼ぶだけ」と明示する）
+- 既定の context strategy は APPEND なので、遷移しても前のノードの task messages は
+  コンテキストに残る。ノードごとの手順は task_messages ではなく role_message に
+  入れる。developer メッセージとしてコンテキストに積むと指示が守られにくく
+  （復唱と同じターンで記録してしまう）、積み重なってトークンも増える。
+  role_message は遷移ごとに置き換わるので、task_messages は1行の短い指示だけにする
+- Flows の関数は既定で `cancel_on_interruption=False`、つまり非同期ツール扱いになる。
+  ASYNC TOOLS の説明文と started/final のメッセージがコンテキストに毎ターン残るので、
+  すぐ返る関数には `@flows_tool_options(cancel_on_interruption=True)` を付ける
+- ContextStrategy.RESET は LLMMessagesUpdateFrame でコンテキストを丸ごと置き換える。
+  会話履歴も消えるため、通話記録（終了時に context から保存）が前半を失う。使わない
 
 ## 通話が終わったときの後始末
 
