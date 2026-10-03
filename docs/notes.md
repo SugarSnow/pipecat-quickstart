@@ -88,6 +88,15 @@
 - `stop_secs` は STT の p99（Deepgram 0.35秒）より小さく保つ。以上だと最終の文字起こしを
   待つ保険が0秒に潰れ、末尾が欠けたままターンが切れる
 
+## 通話テスト
+
+- 安定したネットワークと静かな場所で、スピーカーを使わずに行う。スピーカーだと
+  周りの会話を STT が拾い、会話が崩れる
+- 次が同時に出ているときは、ボットの不具合ではなくサーバー側のネットワーク不調を疑う
+  - `no audio received while speaking`
+  - Deepgram の `Keepalive failed` / websockets の `keepalive ping failed`
+  - `TTS context ... completed with no audio`、TTS や LLM の TTFB が数秒から十数秒
+
 ## Pipecat の既知の不具合
 
 - 文末の句点が履歴で二重になる（音声には出ない。対応しない）
