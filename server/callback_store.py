@@ -41,6 +41,43 @@ def normalize_phone_number(phone_number: str) -> str:
     return re.sub(r"[\s\-‐-―ー−()（）]", "", phone_number.strip())
 
 
+# Mobile numbers are 11 digits and start 070, 080 or 090; everything else a
+# caller is likely to give — landline, IP, freephone — is 10.
+_MOBILE_PREFIXES = ("070", "080", "090")
+_MOBILE_DIGITS = 11
+_OTHER_DIGITS = 10
+
+
+def expected_digit_count(phone_number: str) -> int:
+    """Return how many digits *phone_number* should have.
+
+    Args:
+        phone_number: The number, as the caller gave it.
+
+    Returns:
+        11 for a mobile prefix, 10 otherwise.
+    """
+    digits = re.sub(r"\D", "", phone_number)
+    return _MOBILE_DIGITS if digits.startswith(_MOBILE_PREFIXES) else _OTHER_DIGITS
+
+
+def has_expected_digit_count(phone_number: str) -> bool:
+    """Whether *phone_number* has as many digits as its prefix calls for.
+
+    Counting digits is left to code rather than to the LLM, which read a
+    complete 10-digit landline as too short and accepted a 10-digit number
+    beginning 080 as complete.
+
+    Args:
+        phone_number: The number, as the caller gave it.
+
+    Returns:
+        True when the digit count matches :func:`expected_digit_count`.
+    """
+    digits = re.sub(r"\D", "", phone_number)
+    return len(digits) == expected_digit_count(phone_number)
+
+
 def save_callback_request(
     name: str,
     phone_number: str,
