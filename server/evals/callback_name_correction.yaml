@@ -2,7 +2,10 @@
 # read-back must still carry both.
 #
 # From a phone test: told "名前が違います", the bot asked for the phone number
-# again, and the read-back after the correction dropped the name.
+# again, and the read-back after the correction dropped the name. Later it would
+# read back and record in the same turn, giving the caller no chance to object —
+# which is why the read-back is now spoken by the bot and the confirmation is a
+# function call.
 name: callback_name_correction
 
 judge: !include judge_text.yaml
@@ -22,51 +25,51 @@ turns:
       - event: response
         eval: "お電話番号を尋ねている"
 
-  # Matched literally, for the same reason as the read-back further down: asked
-  # as a judge criterion, a reply beginning "佐藤様、お電話番号は" comes back as
-  # "only the phone number, not the name".
+  # Both details are in hand, so they go to confirm_callback and the bot reads
+  # them back itself. The read-back is a tts_say pre-action, which a text-mode
+  # run cannot see — its wording is pinned in tests/test_read_back.py instead.
+  # What matters here is that nothing is recorded yet.
   - user: "ゼロ八ゼロ一二三四五六七八です"
     expect:
-      - event: response
-        text_contains: "佐藤様、お電話番号は"
-      # And the read-back waits: no recording until the caller answers.
       - event: function_call
-        absent: true
-        within_ms: 3000
+        calls:
+          - name: confirm_callback
+            args: { name: "佐藤", phone_number: "08012345678" }
 
-  # The name was wrong, not the number.
+  # The name was wrong, not the number: only the name is asked for again.
+  #
+  # Sent after a pause: the turn above is satisfied by a function call alone, so
+  # the harness would otherwise speak over the transition it triggered, before
+  # the read-back has been said. A caller answers the read-back, not the silence
+  # before it.
   - user: "すみません、名前が違います"
+    send_after:
+      delay_ms: 3000
     expect:
-      # The prescribed sentence, matched literally, and no judge. Asked as
-      # "asks for the name again, not the number", this exact reply came back
-      # as "asked for clarification on both" — a judge criterion about what a
-      # reply does *not* say gets answered against the whole conversation, where
-      # the number was indeed asked for, a few turns earlier.
-      #
-      # That the number was not re-collected is covered by the next turn: the
-      # read-back below only happens if the bot still had the number in hand.
+      - event: function_call
+        calls:
+          - name: correct_name
       - event: response
-        text_contains: "もう一度お名前をお願いできますか"
+        text_contains: "お名前"
 
+  # The corrected name goes back through the same read-back, carrying the number
+  # that was never re-asked — and then the bot waits. It cannot do otherwise now:
+  # the read-back is a pre-action and the node does not respond on entry, so
+  # there is no turn in which the model could answer its own question.
   - user: "佐藤祐希です"
     expect:
-      # One substring proves both halves are there and in the right order. Asked
-      # as a judge criterion, "both the name and the number" came back "only the
-      # phone number is repeated" for a reply that plainly began with the name.
-      - event: response
-        text_contains: "佐藤祐希様、お電話番号は"
-      # What gets written down is the corrected name, not the one it replaced.
-      # The bot recorded "佐藤" here until the prompt said to pass whatever the
-      # last read-back carried.
-      #
-      # Note what is *not* asserted: that the bot waits for an answer to this
-      # second read-back. It waits for the first one (above) but records straight
-      # after a corrected one, and no amount of prompt wording moved it. The
-      # values are right either way, so this is left as a known difference
-      # rather than a flaky assertion.
+      - event: function_call
+        calls:
+          - name: confirm_name
+            args: { name: "佐藤祐希" }
+      - event: function_call
+        absent: true
+        within_ms: 4000
+
+  - user: "はい、大丈夫です"
+    expect:
       - event: function_call
         calls:
           - name: record_callback
-            args: { name: "佐藤祐希", phone_number: "08012345678" }
       - event: response
         text_contains: "さくら歯科クリニックにお電話いただき、ありがとうございました"

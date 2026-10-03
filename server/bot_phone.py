@@ -99,6 +99,52 @@ FAREWELL_LINE = "それでは失礼いたします。"
 CLOSING_SILENCE_SECS = 3.0
 
 
+# How each digit is read out loud. 0 and 4 and 7 have a second reading that is
+# easy to mishear on a phone (レイ, シ, シチ), so the clearer one is spelled here.
+_DIGIT_READINGS = {
+    "0": "ゼロ",
+    "1": "イチ",
+    "2": "ニ",
+    "3": "サン",
+    "4": "ヨン",
+    "5": "ゴ",
+    "6": "ロク",
+    "7": "ナナ",
+    "8": "ハチ",
+    "9": "キュウ",
+}
+
+
+def spell_out_digits(phone_number: str) -> str:
+    """Return *phone_number* as digits read one at a time.
+
+    Args:
+        phone_number: The number, as the caller gave it.
+
+    Returns:
+        The digits separated by 読点, e.g. ``"ゼロ、ハチ、ゼロ"``. Anything that is
+        not a digit is dropped: the string is going straight to the TTS, and the
+        point of reading digit by digit is lost if a stray character rides along.
+    """
+    return "、".join(_DIGIT_READINGS[c] for c in phone_number if c in _DIGIT_READINGS)
+
+
+def read_back_line(name: str, phone_number: str) -> str:
+    """Return the sentence the bot speaks to confirm a callback request.
+
+    Spoken by the bot itself rather than written by the LLM, so the wording is
+    the same every time and the digits are always read one at a time.
+
+    Args:
+        name: The caller's name, as heard.
+        phone_number: The caller's number, as heard.
+
+    Returns:
+        The read-back, ending in a question.
+    """
+    return f"{name}様、お電話番号は{spell_out_digits(phone_number)}、でよろしいでしょうか。"
+
+
 def is_closing_utterance(text: str) -> bool:
     """Whether a finished bot turn was the closing line.
 
@@ -204,38 +250,35 @@ start_callback を呼ぶときは、その返答では何も言わないでく�
 
 # What the bot is doing once the caller has asked for a callback: collecting the
 # two details, one at a time, and reading them back.
-CALLBACK_TASK = f"""\
+CALLBACK_TASK = """\
 【折り返しのご依頼を受け付ける】
 まずお名前を聞いてください。お名前を聞けたら、次に電話番号を聞いてください。必ず1つずつ順番に聞き、一度に両方を聞かないでください。
 
 【電話番号の聞き取り】
-日本の電話番号は10桁か11桁です。復唱する前に、これまでに聞き取れた数字の桁数を必ず数えてください。
-10桁に満たないときは、けっして復唱してはいけません。足りない桁を補ったり、同じ数字を繰り返して桁を埋めたりするのも禁止です。
-そのうち、相手がまだ言い終えていない様子のとき（「ゼロハチゼロの」のように文が途中で切れているとき）は、「はい」とだけ返して続きを待ってください。
-相手が言い終えた様子なのに（「です」で終わっているなど）10桁に満たないときは、「恐れ入ります、お電話番号をもう一度最初からお願いできますか」と伝えて、最初から聞き直してください。
+日本の電話番号は10桁か11桁です。先に進む前に、これまでに聞き取れた数字の桁数を必ず数えてください。
+相手がまだ言い終えていない様子のとき（「ゼロハチゼロの」のように文が途中で切れているとき）は、「はい」とだけ返して続きを待ってください。
+相手が言い終えた様子なのに（「です」で終わっているなど）10桁に満たないときは、「恐れ入ります、お電話番号をもう一度最初からお願いできますか」と伝えて、最初から聞き直してください。足りない桁を補ったり、同じ数字を繰り返して桁を埋めたりしてはいけません。
 
-【復唱して確認する返答】
-電話番号を10桁か11桁まで聞けたら、お名前と電話番号を復唱し、これでよろしいでしょうかと尋ねてください。
-復唱は「佐藤様、お電話番号はゼロ、ハチ、ゼロ、イチ、ニ、サン、ヨン、ゴ、ロク、ナナ、ハチ、でよろしいでしょうか」のように、お名前から始めて電話番号を続ける形にしてください。電話番号だけの復唱にしないでください。
-電話番号を復唱するときは、数字を1桁ずつ読点で区切ってカタカナで読んでください。たとえば ゼロ、ハチ、ゼロ、イチ、ニ、サン、ヨン、ゴ、ロク、ナナ、ハチ のように読み、かぎかっこなどの記号で番号を囲まないでください。
-この返答はここで終わりです。record_callback は呼ばず、終話の挨拶も言わず、相手の返事を待ってください。
-
-【相手が肯定したとき】
-復唱に対して相手が「はい」などと肯定したら、その次の返答で record_callback を呼んでください。
-渡すお名前と電話番号は、いちばん最後に復唱した内容にしてください。途中で聞き直したときは、古い方ではなく新しい方を渡してください。電話番号は数字だけにしてください。
-record_callback を呼ばずに会話を終えてはいけません。
-
-【相手が否定したとき】
-「違います」などと否定されたら、どちらが違うのかを聞き分けて、違うと言われた方だけを聞き直してください。
-お名前が違うと言われたら「失礼いたしました、もう一度お名前をお願いできますか」の1文だけを返してください。
-電話番号が違うと言われたときや、どちらが違うのか分からないときは「失礼いたしました、もう一度お電話番号をお願いできますか」の1文だけを返してください。
-確認の言葉を何度も繰り返さないでください。
-聞き直さなかった方はすでに聞けているので、もう一度尋ねないでください。
-聞き直した方を聞けたら、お名前と電話番号の両方をもう一度復唱して、これでよろしいでしょうかと尋ねてください。この返答でも record_callback は呼ばず、終話の挨拶も言わず、相手の返事を待ってください。2回目、3回目の復唱でも同じです。
-肯定が返ってくるまで record_callback を呼んではいけません。復唱は何回でも、肯定は必ず1回必要です。
+【両方そろったら】
+お名前と、10桁か11桁の電話番号の両方が聞けたら、confirm_callback にその2つを渡してください。電話番号は数字だけにしてください。
+復唱はこちらで読み上げます。あなたは復唱しないでください。復唱の言葉を返答に含めないでください。
 """
 
-# The last thing on the line.
+CONFIRM_TASK = """\
+【復唱したあとの確認】
+お名前と電話番号の復唱はすでに読み上げられています。あなたから復唱し直さないでください。
+相手が「はい」「大丈夫です」などと肯定したら、record_callback を呼んでください。
+お名前が違うと言われたら correct_name を、電話番号が違うと言われたら correct_phone_number を呼んでください。どちらが違うのか分からないときは correct_phone_number を呼んでください。
+肯定も訂正もない返答（聞き返しなど）のときは、どちらの関数も呼ばず、ひとこと短く答えてください。
+"""
+
+CORRECTION_TASK = """\
+【聞き直し】
+違うと言われた方だけを、ひとことで聞き直してください。もう片方はすでに聞けているので尋ねないでください。
+聞き直した方を聞き取れたら、お名前なら confirm_name に、電話番号なら confirm_phone_number に、その1つだけを渡してください。
+電話番号は数字だけにしてください。復唱はこちらで読み上げるので、あなたは復唱しないでください。
+"""
+
 CLOSING_TASK = f"""\
 【終話】
 「{CLOSING_LINE}」とだけ言ってください。
@@ -259,15 +302,56 @@ def reception_node() -> NodeConfig:
     }
 
 
-def callback_node() -> NodeConfig:
-    """折り返し受付: the caller has asked to be called back."""
+def callback_collect_node() -> NodeConfig:
+    """折り返し受付: collect the name and the number, one at a time."""
     return {
-        "name": "callback",
+        "name": "callback_collect",
         "role_message": ROLE_MESSAGE + CALLBACK_TASK,
         "task_messages": [
             {"role": "developer", "content": "折り返しのご依頼を受け付けてください。"}
         ],
-        "functions": [record_callback],
+        "functions": [confirm_callback],
+    }
+
+
+def callback_confirm_node(name: str, phone_number: str) -> NodeConfig:
+    """復唱と確認: read the details back, then wait for the caller to answer.
+
+    The read-back is a ``tts_say`` pre-action rather than something the LLM
+    writes, and the node does not respond on entry. That is what makes the wait
+    reliable: there is no turn in which the model could both ask "is this right?"
+    and answer its own question. Saying it ourselves fixes the wording too — the
+    digits come from :func:`read_back_line`, not from the model.
+    """
+    return {
+        "name": "callback_confirm",
+        "role_message": ROLE_MESSAGE + CONFIRM_TASK,
+        "task_messages": [
+            {"role": "developer", "content": "復唱に対する相手の返事を待ってください。"}
+        ],
+        "pre_actions": [{"type": "tts_say", "text": read_back_line(name, phone_number)}],
+        "respond_immediately": False,
+        "functions": [record_callback, correct_name, correct_phone_number],
+    }
+
+
+def name_correction_node() -> NodeConfig:
+    """お名前だけを聞き直す。"""
+    return {
+        "name": "name_correction",
+        "role_message": ROLE_MESSAGE + CORRECTION_TASK,
+        "task_messages": [{"role": "developer", "content": "お名前をもう一度伺ってください。"}],
+        "functions": [confirm_name],
+    }
+
+
+def phone_correction_node() -> NodeConfig:
+    """電話番号だけを聞き直す。"""
+    return {
+        "name": "phone_correction",
+        "role_message": ROLE_MESSAGE + CORRECTION_TASK,
+        "task_messages": [{"role": "developer", "content": "お電話番号をもう一度伺ってください。"}],
+        "functions": [confirm_phone_number],
     }
 
 
@@ -281,30 +365,80 @@ def closing_node() -> NodeConfig:
     }
 
 
-# Flows registers its functions with cancel_on_interruption=False, which makes
-# them async tools: the aggregators then write the async-tool protocol into the
-# context — an ASYNC TOOLS instruction block plus a started and a final message
-# per call — and it is all re-sent on every turn afterwards. Both of these
-# functions return immediately (one swaps a node, the other appends a line to a
-# file), so there is nothing to keep running across an interruption.
+def _confirm(flow_manager: FlowManager, **details: str) -> NodeConfig:
+    """Remember whichever detail was just heard and move to the read-back."""
+    flow_manager.state.update(details)
+    name = flow_manager.state.get("name", "")
+    phone_number = flow_manager.state.get("phone_number", "")
+    logger.info(f"Reading back: {name} / {phone_number}")
+    return callback_confirm_node(name, phone_number)
+
+
 @flows_tool_options(cancel_on_interruption=True)
 async def start_callback(flow_manager: FlowManager) -> ConsolidatedFunctionResult:
     """折り返しのご依頼を受け付けます。相手が折り返しを希望したときに呼んでください。"""
-    logger.info("Caller asked for a callback; moving to the callback node")
-    return None, callback_node()
+    logger.info("Caller asked for a callback; collecting their details")
+    return None, callback_collect_node()
 
 
 @flows_tool_options(cancel_on_interruption=True)
-async def record_callback(
+async def confirm_callback(
     flow_manager: FlowManager, name: str, phone_number: str
 ) -> ConsolidatedFunctionResult:
-    """折り返しのご依頼を記録します。復唱して確認が取れたあとに呼んでください。
+    """聞き取ったお名前と電話番号を復唱して確認します。両方そろったら呼んでください。
 
     Args:
-        name: 相手のお名前。復唱して確認が取れたもの。
+        name: 相手のお名前。
         phone_number: 相手の電話番号。数字だけで渡してください。例: 08012345678
     """
-    record = save_callback_request(name, phone_number)
+    return None, _confirm(flow_manager, name=name, phone_number=phone_number)
+
+
+@flows_tool_options(cancel_on_interruption=True)
+async def confirm_name(flow_manager: FlowManager, name: str) -> ConsolidatedFunctionResult:
+    """聞き直したお名前で、もう一度復唱して確認します。
+
+    Args:
+        name: 聞き直したお名前。
+    """
+    return None, _confirm(flow_manager, name=name)
+
+
+@flows_tool_options(cancel_on_interruption=True)
+async def confirm_phone_number(
+    flow_manager: FlowManager, phone_number: str
+) -> ConsolidatedFunctionResult:
+    """聞き直した電話番号で、もう一度復唱して確認します。
+
+    Args:
+        phone_number: 聞き直した電話番号。数字だけで渡してください。例: 08012345678
+    """
+    return None, _confirm(flow_manager, phone_number=phone_number)
+
+
+@flows_tool_options(cancel_on_interruption=True)
+async def correct_name(flow_manager: FlowManager) -> ConsolidatedFunctionResult:
+    """お名前が違うと言われたときに呼んでください。お名前だけを聞き直します。"""
+    logger.info("Caller says the name is wrong; asking for it again")
+    return None, name_correction_node()
+
+
+@flows_tool_options(cancel_on_interruption=True)
+async def correct_phone_number(flow_manager: FlowManager) -> ConsolidatedFunctionResult:
+    """電話番号が違うと言われたときに呼んでください。電話番号だけを聞き直します。"""
+    logger.info("Caller says the number is wrong; asking for it again")
+    return None, phone_correction_node()
+
+
+@flows_tool_options(cancel_on_interruption=True)
+async def record_callback(flow_manager: FlowManager) -> ConsolidatedFunctionResult:
+    """復唱に対して相手が肯定したときに呼んでください。折り返しのご依頼を記録します。"""
+    # The details come from the flow's state, not from arguments: these are the
+    # ones that were read back, so a correction cannot leave a stale name or
+    # number in the record — which is what happened when the model passed them.
+    record = save_callback_request(
+        flow_manager.state.get("name", ""), flow_manager.state.get("phone_number", "")
+    )
     logger.info(f"Callback request saved: {record}")
     return {"saved": True}, closing_node()
 

@@ -20,6 +20,11 @@
   言うべきことを `text_contains` で見るか、後続のターンの挙動で担保する
 - 期待は「待ち始めたあとに届いたイベント」しか拾わない。切電前後のようにイベントが
   数秒遅れて出る場面では、ターンを分けずに同じターンで順に検証する
+- 関数呼び出しだけで満たされるターンの次は `send_after: {delay_ms: 3000}` を置く。
+  期待が満たされた瞬間に次のターンが送られるため、遷移や pre_action の読み上げに
+  かぶってしまう
+- `tts_response` は audio モード専用。`tts_say` で読み上げた台詞はテキストモードの
+  eval では観測できないので、文面は pytest で、流れは function_call の連鎖で見る
 
 ## audio モードの eval
 
@@ -60,6 +65,12 @@
 - Flows の関数は既定で `cancel_on_interruption=False`、つまり非同期ツール扱いになる。
   ASYNC TOOLS の説明文と started/final のメッセージがコンテキストに毎ターン残るので、
   すぐ返る関数には `@flows_tool_options(cancel_on_interruption=True)` を付ける
+- 「言ったあとで待つ」をプロンプトで守らせるのは無理だった（復唱と同じターンで
+  記録してしまう。待たせる指示を強めると別のターンが崩れる）。決め打ちの台詞は
+  `pre_actions` の `tts_say` で読み上げ、そのノードを `respond_immediately: False`
+  にすると、相手が話すまで LLM が動かないので構造的に待つ。台詞の文面も固定できる
+- 次の行動が関数呼び出しだけのノードでは、値を引数で受けずに `flow_manager.state`
+  に持たせる。訂正のあとにモデルが古い値を渡してくる余地がなくなる
 - ContextStrategy.RESET は LLMMessagesUpdateFrame でコンテキストを丸ごと置き換える。
   会話履歴も消えるため、通話記録（終了時に context から保存）が前半を失う。使わない
 
