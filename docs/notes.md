@@ -20,6 +20,11 @@
   言うべきことを `text_contains` で見るか、後続のターンの挙動で担保する
 - 期待は「待ち始めたあとに届いたイベント」しか拾わない。切電前後のようにイベントが
   数秒遅れて出る場面では、ターンを分けずに同じターンで順に検証する
+- 関数呼び出しだけで満たされるターンの次は `send_after: {delay_ms: 3000}` を置く。
+  期待が満たされた瞬間に次のターンが送られるため、遷移や pre_action の読み上げに
+  かぶってしまう
+- `tts_response` は audio モード専用。`tts_say` で読み上げた台詞はテキストモードの
+  eval では観測できないので、文面は pytest で、流れは function_call の連鎖で見る
 
 ## audio モードの eval
 
@@ -60,6 +65,12 @@
 - Flows の関数は既定で `cancel_on_interruption=False`、つまり非同期ツール扱いになる。
   ASYNC TOOLS の説明文と started/final のメッセージがコンテキストに毎ターン残るので、
   すぐ返る関数には `@flows_tool_options(cancel_on_interruption=True)` を付ける
+- 「言ったあとで待つ」をプロンプトで守らせるのは無理だった（復唱と同じターンで
+  記録してしまう。待たせる指示を強めると別のターンが崩れる）。決め打ちの台詞は
+  `pre_actions` の `tts_say` で読み上げ、そのノードを `respond_immediately: False`
+  にすると、相手が話すまで LLM が動かないので構造的に待つ。台詞の文面も固定できる
+- 次の行動が関数呼び出しだけのノードでは、値を引数で受けずに `flow_manager.state`
+  に持たせる。訂正のあとにモデルが古い値を渡してくる余地がなくなる
 - ContextStrategy.RESET は LLMMessagesUpdateFrame でコンテキストを丸ごと置き換える。
   会話履歴も消えるため、通話記録（終了時に context から保存）が前半を失う。使わない
 
@@ -76,6 +87,15 @@
   2つは直列で、猶予の途中で話し始めると進行が破棄されるため、片方だけ縮める設定はない
 - `stop_secs` は STT の p99（Deepgram 0.35秒）より小さく保つ。以上だと最終の文字起こしを
   待つ保険が0秒に潰れ、末尾が欠けたままターンが切れる
+
+## 通話テスト
+
+- 安定したネットワークと静かな場所で、スピーカーを使わずに行う。スピーカーだと
+  周りの会話を STT が拾い、会話が崩れる
+- 次が同時に出ているときは、ボットの不具合ではなくサーバー側のネットワーク不調を疑う
+  - `no audio received while speaking`
+  - Deepgram の `Keepalive failed` / websockets の `keepalive ping failed`
+  - `TTS context ... completed with no audio`、TTS や LLM の TTFB が数秒から十数秒
 
 ## Pipecat の既知の不具合
 

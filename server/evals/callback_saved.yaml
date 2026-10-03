@@ -21,21 +21,29 @@ turns:
       - event: response
         eval: "お電話番号を尋ねている"
 
+  # The details enter the flow here, and are compared literally: args is a subset
+  # check against the call's own arguments. The read-back that follows is spoken
+  # by the bot as a tts_say pre-action, which a text-mode run cannot observe —
+  # its wording is pinned in tests/test_read_back.py.
   - user: "ゼロ八ゼロ一二三四五六七八です"
     expect:
-      - event: response
-        text_contains: "佐藤祐希"
-        eval: "電話番号を復唱して、これでよいか尋ねている"
+      - event: function_call
+        calls:
+          - name: confirm_callback
+            args: { name: "佐藤祐希", phone_number: "08012345678" }
 
+  # After a pause, as a caller answering the read-back would. The turn above is
+  # satisfied by a function call alone, so without this the harness speaks over
+  # the transition it triggered.
   - user: "はい、大丈夫です"
+    send_after:
+      delay_ms: 3000
     expect:
-      # Both arguments are compared literally. args is a subset check against the
-      # call's own arguments, and a judge is no use here — it only reads text the
-      # bot generated, not the arguments of a call.
+      # record_callback takes no arguments: it writes down what was read back,
+      # straight from the flow's state.
       - event: function_call
         calls:
           - name: record_callback
-            args: { name: "佐藤祐希", phone_number: "08012345678" }
       # The closing line, and only the closing line: a phone test caught
       # "はい、ありがとうございます。" being tacked on in front of it.
       - event: response

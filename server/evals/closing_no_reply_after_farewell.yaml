@@ -32,16 +32,19 @@ turns:
       - event: response
         eval: "お電話番号を尋ねている"
 
+  # The read-back itself is a tts_say pre-action and invisible to a text-mode
+  # run; what is observable is the call that carries the details into the flow.
   - user: "ゼロ八ゼロ一二三四五六七八です"
     expect:
-      - event: response
-        # The name is checked literally: asking a judge whether a name was
-        # repeated turned out to be unreliable, and this is not a question that
-        # needs judgement.
-        text_contains: "佐藤祐希"
-        eval: "電話番号を復唱して、これでよいか尋ねている"
+      - event: function_call
+        calls:
+          - name: confirm_callback
+            args: { name: "佐藤祐希", phone_number: "08012345678" }
 
+  # After a pause, as a caller answering the read-back would.
   - user: "はい、大丈夫です"
+    send_after:
+      delay_ms: 3000
     expect:
       - event: response
         text_contains: "さくら歯科クリニックにお電話いただき、ありがとうございました"
