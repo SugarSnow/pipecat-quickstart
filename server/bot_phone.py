@@ -63,7 +63,7 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
 from call_record_store import save_call_record
-from callback_store import save_callback_request
+from callback_store import has_expected_digit_count, save_callback_request
 
 load_dotenv(override=True)
 
@@ -94,6 +94,9 @@ CLOSING_LINE = "さくら歯科クリニックにお電話いただき、あり�
 # Spoken by the bot itself (not the LLM) when the caller stays on the line after
 # the closing, just before hanging up.
 FAREWELL_LINE = "それでは失礼いたします。"
+
+# Spoken when the digits do not add up, in place of a read-back.
+RE_ASK_NUMBER_LINE = "恐れ入ります、お電話番号をもう一度最初からお願いできますか。"
 
 # How long to hold the line after the closing before hanging up.
 CLOSING_SILENCE_SECS = 3.0
@@ -253,14 +256,17 @@ start_callback を呼ぶときは、その返答では何も言わないでく�
 CALLBACK_TASK = """\
 【折り返しのご依頼を受け付ける】
 まずお名前を聞いてください。お名前を聞けたら、次に電話番号を聞いてください。必ず1つずつ順番に聞き、一度に両方を聞かないでください。
+お名前は名字だけでもかまいません。下のお名前を尋ね直さないでください。
 
 【電話番号の聞き取り】
-日本の電話番号は10桁か11桁です。先に進む前に、これまでに聞き取れた数字の桁数を必ず数えてください。
 相手がまだ言い終えていない様子のとき（「ゼロハチゼロの」のように文が途中で切れているとき）は、「はい」とだけ返して続きを待ってください。
-相手が言い終えた様子なのに（「です」で終わっているなど）10桁に満たないときは、「恐れ入ります、お電話番号をもう一度最初からお願いできますか」と伝えて、最初から聞き直してください。足りない桁を補ったり、同じ数字を繰り返して桁を埋めたりしてはいけません。
+相手が言い終えた様子なら、聞き取れた数字をそのまま渡してください。桁数の確認はこちらで行うので、あなたは数えなくてよいです。
+桁が足りないと思っても、自分で止めずにそのまま渡してください。足りているかどうかはこちらで判定し、足りなければこちらから聞き直します。
+まだ数字をひとつも聞き取れていないときは、関数を呼ばずにお電話番号を尋ねてください。
+聞き取れなかった桁を補ったり、同じ数字を繰り返して桁を埋めたりしてはいけません。聞き取れた数字だけを渡してください。
 
 【両方そろったら】
-お名前と、10桁か11桁の電話番号の両方が聞けたら、confirm_callback にその2つを渡してください。電話番号は数字だけにしてください。
+お名前と電話番号の両方が聞けたら、confirm_callback にその2つを渡してください。電話番号は数字だけにしてください。
 復唱はこちらで読み上げます。あなたは復唱しないでください。復唱の言葉を返答に含めないでください。
 """
 
@@ -270,12 +276,14 @@ CONFIRM_TASK = """\
 相手が「はい」「大丈夫です」などと肯定したら、record_callback を呼んでください。
 お名前が違うと言われたら correct_name を、電話番号が違うと言われたら correct_phone_number を呼んでください。どちらが違うのか分からないときは correct_phone_number を呼んでください。
 肯定も訂正もない返答（聞き返しなど）のときは、どちらの関数も呼ばず、ひとこと短く答えてください。
+関数を呼ばずに、終話の挨拶やお礼、折り返しの約束を言ってはいけません。肯定されたのに record_callback を呼ばないまま会話を終えるのは誤りです。
 """
 
 CORRECTION_TASK = """\
 【聞き直し】
 違うと言われた方だけを、ひとことで聞き直してください。もう片方はすでに聞けているので尋ねないでください。
 聞き直した方を聞き取れたら、お名前なら confirm_name に、電話番号なら confirm_phone_number に、その1つだけを渡してください。
+渡すのは、いま聞き直して新しく聞き取れた方です。前に聞いていた古い値を渡してはいけません。相手が「佐藤祐希です」と言い直したなら、渡すのは「佐藤祐希」です。
 電話番号は数字だけにしてください。復唱はこちらで読み上げるので、あなたは復唱しないでください。
 """
 
@@ -355,6 +363,23 @@ def phone_correction_node() -> NodeConfig:
     }
 
 
+def number_retry_node() -> NodeConfig:
+    """桁数が合わない番号を、復唱せずに聞き直す。
+
+    Same shape as the read-back node — a fixed line, then silence until the
+    caller speaks — because the number must not be read back at all: repeating
+    a number that cannot be right invites a "yes" to something wrong.
+    """
+    return {
+        "name": "number_retry",
+        "role_message": ROLE_MESSAGE + CORRECTION_TASK,
+        "task_messages": [{"role": "developer", "content": "お電話番号をもう一度伺ってください。"}],
+        "pre_actions": [{"type": "tts_say", "text": RE_ASK_NUMBER_LINE}],
+        "respond_immediately": False,
+        "functions": [confirm_phone_number],
+    }
+
+
 def closing_node() -> NodeConfig:
     """終話: say the closing line, and nothing else."""
     return {
@@ -366,10 +391,20 @@ def closing_node() -> NodeConfig:
 
 
 def _confirm(flow_manager: FlowManager, **details: str) -> NodeConfig:
-    """Remember whichever detail was just heard and move to the read-back."""
+    """Remember whichever detail was just heard and move to the read-back.
+
+    Unless the number cannot be right: a mobile prefix needs 11 digits and
+    everything else 10, and a number that does not add up is asked for again
+    instead of being read back.
+    """
     flow_manager.state.update(details)
     name = flow_manager.state.get("name", "")
     phone_number = flow_manager.state.get("phone_number", "")
+
+    if not has_expected_digit_count(phone_number):
+        logger.info(f"Phone number has the wrong digit count ({phone_number}); asking again")
+        return number_retry_node()
+
     logger.info(f"Reading back: {name} / {phone_number}")
     return callback_confirm_node(name, phone_number)
 

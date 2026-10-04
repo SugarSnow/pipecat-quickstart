@@ -28,5 +28,7 @@ suite:
       - in_scope_unknown_wording
       - out_of_scope_callback_offer
       - out_of_scope_wording
+      - phone_number_digit_count
+      - phone_number_landline
       - phone_number_no_completion
       - scope_question_not_refused

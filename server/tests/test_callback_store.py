@@ -6,6 +6,8 @@ from datetime import datetime
 import pytest
 
 from callback_store import (
+    expected_digit_count,
+    has_expected_digit_count,
     normalize_phone_number,
     read_callback_requests,
     save_callback_request,
@@ -76,3 +78,47 @@ def test_grouping_characters_are_removed(given, expected):
 def test_an_undialable_value_is_kept_as_it_is():
     """Mangling a bad value into digits would hide that it was bad."""
     assert normalize_phone_number("ゼロハチゼロ") == "ゼロハチゼロ"
+
+
+@pytest.mark.parametrize(
+    ("phone_number", "expected"),
+    [
+        ("08012345678", 11),  # 携帯
+        ("07012345678", 11),
+        ("09012345678", 11),
+        ("0312345678", 10),  # 固定電話
+        ("0612345678", 10),
+        ("0501234567", 10),  # IP電話
+        ("0120123456", 10),  # フリーダイヤル
+    ],
+)
+def test_how_many_digits_a_prefix_calls_for(phone_number, expected):
+    assert expected_digit_count(phone_number) == expected
+
+
+@pytest.mark.parametrize(
+    "phone_number",
+    ["08012345678", "09012345678", "0312345678", "0120123456", "080-1234-5678"],
+)
+def test_a_complete_number_passes(phone_number):
+    assert has_expected_digit_count(phone_number)
+
+
+@pytest.mark.parametrize(
+    ("phone_number", "why"),
+    [
+        ("0801234567", "携帯なのに10桁"),
+        ("080123456789", "携帯なのに12桁"),
+        ("031234567", "固定電話なのに9桁"),
+        ("03123456789", "固定電話なのに11桁"),
+        ("", "何も聞き取れていない"),
+    ],
+)
+def test_a_number_that_cannot_be_right_is_rejected(phone_number, why):
+    assert not has_expected_digit_count(phone_number), why
+
+
+def test_the_count_is_of_digits_not_characters():
+    """The caller's grouping is theirs; only the digits decide."""
+    assert has_expected_digit_count("080 1234 5678")
+    assert has_expected_digit_count("（03）1234-5678")

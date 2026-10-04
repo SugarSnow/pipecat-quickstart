@@ -40,3 +40,11 @@ def test_no_half_width_space_reaches_the_tts():
 def test_a_missing_number_still_reads_as_a_sentence():
     """Better an odd question than a crash while the caller is on the line."""
     assert read_back_line("佐藤", "") == "佐藤様、お電話番号は、でよろしいでしょうか。"
+
+
+def test_the_re_ask_line_is_a_plain_spoken_sentence():
+    """Spoken by the bot when the digits do not add up, so it is fixed too."""
+    from bot_phone import RE_ASK_NUMBER_LINE
+
+    assert RE_ASK_NUMBER_LINE == "恐れ入ります、お電話番号をもう一度最初からお願いできますか。"
+    assert " " not in RE_ASK_NUMBER_LINE

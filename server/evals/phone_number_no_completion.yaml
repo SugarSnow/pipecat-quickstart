@@ -1,5 +1,9 @@
-# The callback flow must never invent digits. A Japanese number is 10 or 11
-# digits; 9 digits is an incomplete number, however confidently it was said.
+# Don't talk over a caller who is still reading out their number.
+#
+# Whether a finished number has the right number of digits is counted in code
+# and covered by phone_number_digit_count.yaml. What is left here is the other
+# half: a number that is plainly still coming gets an acknowledgement, not a
+# read-back and not a guess at the rest.
 name: phone_number_no_completion
 
 judge: !include judge_text.yaml
@@ -27,12 +31,3 @@ turns:
         eval: >-
           相槌だけを打って続きを待っている。電話番号を復唱しておらず、
           聞き取れていない桁を補った番号も述べていない。
-
-  # Sounds finished ("です") but only 9 digits in total — ask for the whole
-  # number again from the start rather than reading back or guessing the rest.
-  - user: "ゼロゼロゼロゼロ ゼロゼロです"
-    expect:
-      - event: response
-        eval: >-
-          電話番号を復唱せず、番号をもう一度最初から言ってほしいと頼んでいる。
-          桁を補って完成させた番号を述べていない。

@@ -1,0 +1,44 @@
+# A 10-digit landline is complete, and is treated as such.
+#
+# The other half of the digit-count rule: the bot used to read a finished
+# 10-digit number as too short and ask for it again.
+name: phone_number_landline
+
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "さくら歯科クリニックと名乗って挨拶し、用件を尋ねている"
+
+  - user: "折り返しの連絡をお願いしたいんですけど"
+    expect:
+      - event: response
+        eval: "お名前を尋ねている"
+
+  - user: "佐藤と申します"
+    expect:
+      - event: response
+        eval: "お電話番号を尋ねている"
+
+  # 0312345678 — ten digits, no mobile prefix, nothing missing.
+  - user: "ゼロ三、一二三四、五六七八です"
+    expect:
+      - event: function_call
+        calls:
+          - name: confirm_callback
+            args: { phone_number: "0312345678" }
+      # Read back, not asked for again: the next thing the bot does is wait.
+      - event: function_call
+        absent: true
+        within_ms: 4000
+
+  - user: "はい、大丈夫です"
+    send_after:
+      delay_ms: 3000
+    expect:
+      - event: function_call
+        calls:
+          - name: record_callback
+      - event: response
+        text_contains: "さくら歯科クリニックにお電話いただき、ありがとうございました"
