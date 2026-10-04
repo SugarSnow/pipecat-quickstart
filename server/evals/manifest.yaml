@@ -22,6 +22,7 @@ suite:
       - callback_name_correction
       - callback_saved
       - callback_offer_not_repeated
+      - callback_requested_directly
       - closing_hangup_audio
       - closing_no_reply_after_farewell
       - in_scope_answers

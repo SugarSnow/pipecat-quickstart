@@ -1,0 +1,24 @@
+# A caller who offers their details is not turned down first.
+#
+# From a phone test: asked "名前と電話番号伝えてもいいですか", the bot read out
+# the whole refusal and then offered a callback — to someone who had just asked
+# for one.
+name: callback_requested_directly
+
+judge: !include judge_text.yaml
+
+turns:
+  - expect:
+      - event: response
+        eval: "さくら歯科クリニックと名乗って挨拶し、用件を尋ねている"
+
+  # The caller asks for the callback themselves. Straight to the flow: the call
+  # going through start_callback in this turn is what says the refusal path was
+  # not taken.
+  - user: "予約したいんで、名前と電話番号を伝えてもいいですか"
+    expect:
+      - event: function_call
+        calls:
+          - name: start_callback
+      - event: response
+        eval: "返答がお名前を尋ねることから始まっている"

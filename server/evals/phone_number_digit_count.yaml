@@ -39,10 +39,30 @@ turns:
         absent: true
         within_ms: 4000
 
-  # The full number, given after the re-ask.
-  - user: "ゼロ八ゼロ、一二三四、五六七八です"
+  # Read out in pieces after the re-ask, the way someone reads a number off a
+  # screen. Each piece reaches confirm_phone_number and the flow decides what to
+  # do with it; what it says back is a fixed line, so it is checked in
+  # tests/test_confirm_routing.py rather than here. What this turn shows is that
+  # the pieces accumulate instead of resetting the collection.
+  # No expectations on the pieces themselves. A piece either reaches
+  # confirm_phone_number, where the flow answers "はい" and waits, or the model
+  # holds it back and says as much itself — the caller hears the same thing
+  # either way, so asserting one of the two would only be asserting which path
+  # the model happened to take. The flow's side of it is checked in
+  # tests/test_confirm_routing.py.
+  - user: "ゼロ八ゼロ"
     send_after:
       delay_ms: 3000
+
+  - user: "一二三四の"
+    send_after:
+      delay_ms: 2000
+
+  # Finished this time, and the digits add up. Whichever way the pieces were
+  # handled, this is where the whole number reaches the flow.
+  - user: "五六七八です"
+    send_after:
+      delay_ms: 2000
     expect:
       - event: function_call
         calls:
