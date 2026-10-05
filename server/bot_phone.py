@@ -27,6 +27,7 @@ Then expose it for Twilio and point a TwiML Bin's <Stream> at it::
 """
 
 import os
+import time
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -40,7 +41,12 @@ from pipecat.flows import (
     NodeConfig,
     flows_tool_options,
 )
-from pipecat.frames.frames import Frame, TTSSpeakFrame, UserIdleTimeoutUpdateFrame
+from pipecat.frames.frames import (
+    BotStoppedSpeakingFrame,
+    Frame,
+    TTSSpeakFrame,
+    UserIdleTimeoutUpdateFrame,
+)
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -55,7 +61,6 @@ from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.openai.responses.llm import OpenAIResponsesLLMService
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
-from pipecat.turns.user_mute import FirstSpeechUserMuteStrategy
 from pipecat.turns.user_mute.base_user_mute_strategy import BaseUserMuteStrategy
 from pipecat.turns.user_start import VADUserTurnStartStrategy
 from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
@@ -104,6 +109,16 @@ RE_ASK_NUMBER_LINE = "恐れ入ります、お電話番号をもう一度最初�
 
 # Spoken while the caller is still reading their number out.
 ACKNOWLEDGE_LINE = "はい。"
+
+# The first thing the caller hears. Spoken by the bot rather than composed by
+# the LLM: a greeting has one right wording and nothing to decide, and leaving
+# it to the LLM cost a call its opening — the model was still generating when
+# the VAD heard the caller, the turn was cancelled, and the bot never gave its
+# name. A fixed line also starts speaking a second sooner, since there is no
+# LLM round trip in front of it.
+GREETING_LINE = (
+    "お電話ありがとうございます。さくら歯科クリニックです。ご用件をお聞かせいただけますか。"
+)
 
 # How long to hold the line after the closing before hanging up.
 CLOSING_SILENCE_SECS = 3.0
@@ -207,6 +222,71 @@ class ClosingUserMuteStrategy(BaseUserMuteStrategy):
         return self.closing
 
 
+# Long enough that no greeting reaches it, short enough that a caller is never
+# stranded. Only a bot that never speaks at all gets this far — a TTS outage,
+# say — and by then the call is lost anyway; unmuting at least lets the caller
+# hear themselves be heard rather than talk into a line that answers nothing.
+OPENING_MUTE_TIMEOUT_SECS = 15.0
+
+
+class OpeningUserMuteStrategy(BaseUserMuteStrategy):
+    """Mutes the caller from the moment the line connects until the greeting ends.
+
+    FirstSpeechUserMuteStrategy, the framework strategy this replaces, is
+    explicit that it "allows user input before the bot starts speaking" — it
+    only covers the span between the bot's first BotStartedSpeakingFrame and the
+    matching stop. The window it leaves open is the one that actually broke a
+    call: the caller spoke into the silence before the greeting began, the VAD
+    broadcast an interruption, and the greeting was cancelled before the bot had
+    named the clinic.
+
+    Starting muted closes that window. Everything else matches the framework
+    strategy: the mute lifts when the first bot speech ends, and later turns
+    barge in normally.
+    """
+
+    def __init__(self, timeout: float = OPENING_MUTE_TIMEOUT_SECS):
+        """Initialize the strategy, muted.
+
+        Args:
+            timeout: Seconds to stay muted if the bot never speaks at all.
+        """
+        super().__init__()
+        self._timeout = timeout
+        self._released = False
+        self._first_frame_at: float | None = None
+
+    async def process_frame(self, frame: Frame) -> bool:
+        """Report whether the caller should be muted.
+
+        Args:
+            frame: The frame being evaluated.
+
+        Returns:
+            True until the bot has finished its opening greeting.
+        """
+        await super().process_frame(frame)
+
+        if self._released:
+            return False
+
+        if isinstance(frame, BotStoppedSpeakingFrame):
+            self._released = True
+            return False
+
+        # The clock starts at the first frame rather than at construction: the
+        # strategy is built while the pipeline is still being assembled, which
+        # is well before the line connects.
+        if self._first_frame_at is None:
+            self._first_frame_at = time.monotonic()
+        elif time.monotonic() - self._first_frame_at > self._timeout:
+            logger.warning("No opening greeting within the timeout; unmuting the caller")
+            self._released = True
+            return False
+
+        return True
+
+
 # The system instruction, set once and kept for the whole call: who the bot is
 # and how it speaks. Flows pushes this when the first node is set and leaves it
 # in place until a node names a new one.
@@ -231,7 +311,7 @@ ROLE_MESSAGE = """\
 # a node apiece would mean a routing function call before every answer.
 RECEPTION_TASK = f"""\
 【ご用件を伺う】
-はじめの挨拶では、さくら歯科クリニックと名乗って短く挨拶し、ご用件を尋ねてください。
+はじめの挨拶はこちらで読み上げ済みです。あなたが挨拶や名乗りから始めることはありません。相手の用件に答えてください。
 
 【答えてよい内容】
 答えてよいのは、次のクリニック情報に書かれている「営業時間」「休診日」「場所」「アクセス」の4つだけです。
@@ -310,11 +390,19 @@ CLOSING_TASK = f"""\
 # default APPEND strategy leaves the previous node's task messages in the
 # context; a role_message is replaced on each transition instead.
 def reception_node() -> NodeConfig:
-    """The node the call starts in: 用件確認 and, in the same breath, 案内 and 断り."""
+    """The node the call starts in: 用件確認 and, in the same breath, 案内 and 断り.
+
+    The greeting is a ``tts_say`` pre-action and the node then waits, for the
+    same reason the read-back does: the wording is fixed, so there is nothing
+    for the LLM to decide, and speaking it directly removes the generation gap
+    the caller used to talk into.
+    """
     return {
         "name": "reception",
         "role_message": ROLE_MESSAGE + RECEPTION_TASK,
         "task_messages": [{"role": "developer", "content": "ご用件を伺ってください。"}],
+        "pre_actions": [{"type": "tts_say", "text": GREETING_LINE}],
+        "respond_immediately": False,
         "functions": [start_callback],
     }
 
@@ -599,11 +687,12 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
                 # number with "はい" and waits for the rest.
                 stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.8)],
             ),
-            # Mute user input while the bot's opening greeting is playing, so a
-            # false VAD trigger can't interrupt/cancel it. Released as soon as
-            # that first bot speech finishes, so later turns barge-in normally.
-            # closing_mute takes over at the other end of the call.
-            user_mute_strategies=[FirstSpeechUserMuteStrategy(), closing_mute],
+            # Mute user input from the moment the line connects until the
+            # opening greeting has been spoken in full, so neither a false VAD
+            # trigger nor a caller who starts talking early can cancel it.
+            # Released as soon as that first bot speech finishes, so later turns
+            # barge-in normally. closing_mute takes over at the other end.
+            user_mute_strategies=[OpeningUserMuteStrategy(), closing_mute],
             # Idle detection stays off for the conversation itself: a caller who
             # goes quiet mid-call is thinking, not finished. It is armed with a
             # UserIdleTimeoutUpdateFrame once the closing line is spoken.
@@ -646,8 +735,9 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         logger.info("Client connected")
         # Kick off the conversation. Twilio's WebSocket connection has no RTVI
         # client-ready handshake, so start as soon as the stream connects.
-        # Setting the first node is what speaks the greeting: the node's task
-        # messages go into the context and the flow runs the LLM straight away.
+        # Setting the first node is what speaks the greeting: its tts_say
+        # pre-action runs on the transition. The node does not respond
+        # immediately, so nothing else is said until the caller speaks.
         await flow_manager.initialize(reception_node())
 
     @assistant_aggregator.event_handler("on_assistant_turn_stopped")

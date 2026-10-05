@@ -29,6 +29,10 @@
   かぶってしまう
 - `tts_response` は audio モード専用。`tts_say` で読み上げた台詞はテキストモードの
   eval では観測できないので、文面は pytest で、流れは function_call の連鎖で見る
+- テキストモードの発話は、文字起こしではなく `LLMMessagesAppendFrame` として
+  RTVI から直接コンテキストに入る（`rtvi/processor.py` の `_handle_send_text`）。
+  そのため user mute strategy では止まらず、`run_immediately` で `interrupt_bot()` も
+  呼ばれる。ミュートの挙動を eval で見たいときは audio モードを使う
 
 ## audio モードの eval
 
@@ -50,6 +54,16 @@
 - Cartesia の接続が不安定なことがある。ボットが起動時に再接続を繰り返して Bot ready に
   到達しない場合は、残っている `bot_phone.py` と `pipecat eval` のプロセスを落とし、
   数分おいてから実行し直す
+
+## tts_say と eval の観測
+
+- `tts_say` で読み上げた台詞は、テキストモードの eval からは一切観測できない。
+  ハーネスが `bot-tts-text` を `bot_audio` が False のとき捨てるため
+  （`pipecat/evals/harness.py` の `_segment_event` 周辺）。`response` は
+  テキストモードでは `llm_response` に読み替えられるので、LLM が書いていない文は
+  どのイベントにも出てこない。文面は pytest、流れは audio モードで見る
+- そのため、定型文言を `tts_say` に移すと、その文を見ているテキストシナリオが
+  すべて落ちる。挨拶を固定文にしたときは14本の冒頭の判定を外した
 
 ## Pipecat Flows
 
@@ -100,6 +114,16 @@
   （CancelFrame）とボットが切った場合（EndFrame）の両方を1箇所で拾える
 - テキストモードの eval ではボットが流用のため生かされたままで、パイプラインは
   終了しない。終了時の処理を確かめたいときは audio モードのシナリオを使う
+
+## 最初の挨拶
+
+- `FirstSpeechUserMuteStrategy` は、ボットが話し**始める前**はミュートしない
+  （docstring に明記）。接続から読み上げ開始までの隙間で相手が話すと挨拶が
+  取り消される。接続時点からミュートする自前の strategy が要る
+- ミュートを解除する条件がボットの発話だけだと、TTS が落ちたときに相手が
+  永久にミュートされる。時間の上限を併せて入れる
+- `respond_immediately: False` は最初のノード（`FlowManager.initialize`）でも効く。
+  `_set_node` が `LLMRunFrame` を送らなくなるだけなので、初期ノードも同じ
 
 ## ターン検出
 
