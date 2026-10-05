@@ -197,6 +197,24 @@ def is_closing_utterance(text: str) -> bool:
     return "失礼いたします" in text
 
 
+def is_callback_offer(text: str) -> bool:
+    """Whether *text* is a turn in which the callback was offered in full.
+
+    "いかがなさいますか" is the offer line's last clause and appears in nothing
+    else the bot says, so finding it means the caller heard the offer through
+    to its question. An offer cut off before it — the context keeps only what
+    was actually played — does not match, which is the wanted answer: a caller
+    who never heard the question was never really offered anything.
+
+    Args:
+        text: The assistant turn to examine.
+
+    Returns:
+        True when the offer was made in full.
+    """
+    return "いかがなさいますか" in text
+
+
 class ClosingUserMuteStrategy(BaseUserMuteStrategy):
     """Mutes the caller once the bot has said its closing line.
 
@@ -442,7 +460,40 @@ ROLE_MESSAGE = """\
 # the four topics it knows, turning everything else down. 案内 and 断り live in the
 # same node on purpose — they are the two branches of one per-turn decision, and
 # a node apiece would mean a routing function call before every answer.
-RECEPTION_TASK = f"""\
+def reception_task(*, offered: bool) -> str:
+    """The 応対 node's procedure, in its before- and after-the-offer forms.
+
+    The callback offer may be made once per call. That used to be a rule in the
+    prompt — "一度だけ", with the line itself quoted right there — and the model
+    broke it about one turn in five. Here the offered form simply never mentions
+    the line, so there is nothing to repeat; the two forms are otherwise the
+    same text.
+
+    Args:
+        offered: Whether the callback has already been offered on this call.
+
+    Returns:
+        The task text for the matching node.
+    """
+    # The one clause that differs, appended to each refusal.
+    offer_clause = (
+        ""
+        if offered
+        else f"続けて「{CALLBACK_OFFER_LINE}」とそのまま伝えてください。"
+    )
+    # In the offered form the line survives in one sentence only, and that
+    # sentence is about repeating it — the caller asked what was said, and the
+    # same offer reaching them twice is not two offers. What is gone is the
+    # "and then offer" clause on each refusal above, which is what actually
+    # drove the bot to offer again.
+    offer_rule = (
+        "折り返しのご案内は、この電話でもう済んでいます。こちらから持ちかけてはいけません。答えられないことが続いても、断りの文言だけで返答を終えてください。\n"
+        f"例外は聞き返されたときだけです。直前の発言を言い直すよう求められたら、「{CALLBACK_OFFER_LINE}」の部分も省かずにそのまま言い直してください。"
+        if offered
+        else "折り返しのご案内は、1回の電話の中で一度だけです。"
+    )
+
+    return f"""\
 【ご用件を伺う】
 はじめの挨拶はこちらで読み上げ済みです。あなたが挨拶や名乗りから始めることはありません。相手の用件に答えてください。
 
@@ -452,19 +503,17 @@ RECEPTION_TASK = f"""\
 {CLINIC_INFO}
 休診日やアクセスを尋ねられたときも、このクリニック情報に書かれているとおりに答えてください。
 このクリニック情報に書かれていないことは、たとえ営業時間や場所に関する話題であっても、推測で答えてはいけません。
-その場合は「{UNKNOWN_LINE}」とそのまま伝えてください。この電話でまだ折り返しをご案内していなければ、続けて「{CALLBACK_OFFER_LINE}」とそのまま伝えてください。この返答ではお名前や電話番号をまだ聞かないでください。
+その場合は「{UNKNOWN_LINE}」とそのまま伝えてください。{offer_clause}この返答ではお名前や電話番号をまだ聞かないでください。
 駐車場や設備のように、クリニック情報に書かれていない施設のことを尋ねられたときも、この文言で答えてください。
 年末年始やお盆のように、クリニック情報に書かれていない日付や期間について尋ねられたときは、営業時間や休診日の情報で代わりに答えてはいけません。この文言で答えてください。
 
 【答えてはいけない内容】
 予約の受付や変更、料金、治療内容、症状の相談、その他上記4つ以外の質問には答えないでください。
-その場合は「{OUT_OF_SCOPE_LINE}」とそのまま伝えてください。この電話でまだ折り返しをご案内していなければ、続けて「{CALLBACK_OFFER_LINE}」とそのまま伝えてください。この返答ではお名前や電話番号をまだ聞かないでください。
+その場合は「{OUT_OF_SCOPE_LINE}」とそのまま伝えてください。{offer_clause}この返答ではお名前や電話番号をまだ聞かないでください。
 なぜ答えられないのかと尋ねられたら、この電話でご案内できるのは営業時間、休診日、場所とアクセスだけだと伝えてください。
 
-【折り返しのご案内は一度だけ】
-折り返しのご案内は、1回の電話の中で一度だけです。一度ご案内したあとは、答えられないことが続いても、断りの文言だけで返答を終えてください。
-ただし、ご案内が「いかがなさいますか」まで言い終わらずに途中で切れていたときは、まだご案内していないものとして扱ってください。その場合は「{CALLBACK_OFFER_LINE}」を最初から最後まで言い直してください。
-2回目以降は「{CALLBACK_OFFER_LINE}」と言ってはいけません。「いかがなさいますか」と尋ね直すこともしないでください。
+【折り返しのご案内】
+{offer_rule}
 相手が折り返しを希望すると言ったときだけ、start_callback を呼んでください。
 相手が自分から折り返しを申し出たとき（「名前と電話番号を伝えてもいいですか」「折り返してもらえますか」「電話がほしいです」など）は、断りの文言を言わずに、すぐ start_callback を呼んでください。もう希望していると分かっているので、希望するかどうかを尋ね直す必要もありません。
 start_callback を呼ぶときは、その返答では何も言わないでください。相槌も、お名前や電話番号を尋ねる言葉も入れず、関数を呼ぶだけにしてください。お名前は関数を呼んだあとの返答で、ひとつずつ伺います。
@@ -533,9 +582,28 @@ def reception_node() -> NodeConfig:
     """
     return {
         "name": "reception",
-        "role_message": ROLE_MESSAGE + RECEPTION_TASK,
+        "role_message": ROLE_MESSAGE + reception_task(offered=False),
         "task_messages": [{"role": "developer", "content": "ご用件を伺ってください。"}],
         "pre_actions": [{"type": "tts_say", "text": GREETING_LINE}],
+        "respond_immediately": False,
+        "functions": [start_callback],
+    }
+
+
+def reception_offered_node() -> NodeConfig:
+    """同じ応対を続ける。ただし折り返しのご案内はもう持ちかけない。
+
+    The same node as above with one thing taken away: its instructions no
+    longer contain the offer line, so there is no wording left to repeat. The
+    bot is moved here the moment it finishes saying the offer, which is why
+    nothing is spoken on arrival — it has just spoken.
+    """
+    return {
+        "name": "reception_offered",
+        "role_message": ROLE_MESSAGE + reception_task(offered=True),
+        "task_messages": [
+            {"role": "developer", "content": "折り返しのご案内は済んでいます。"}
+        ],
         "respond_immediately": False,
         "functions": [start_callback],
     }
@@ -922,6 +990,26 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         # modes: a text-mode eval run skips TTS entirely, so no TTS request is
         # ever made, but the assistant turn still closes.
         content = message.content or ""
+
+        # The offer is made once per call, and this is where "once" is decided.
+        # It is read off the turn the bot actually produced rather than left to
+        # the prompt, which quoted the line while forbidding it and lost about
+        # one turn in five. Moving to a node whose instructions never mention
+        # the line leaves nothing to repeat.
+        #
+        # Only while 応対 is the node in play: the read-back and the closing are
+        # elsewhere in the flow, and a stray match there would swap the
+        # instructions out from under them.
+        if (
+            flow_manager.current_node == "reception"
+            and not flow_manager.state.get("callback_offered")
+            and is_callback_offer(content)
+        ):
+            logger.info("Callback offered; it will not be offered again on this call")
+            flow_manager.state["callback_offered"] = True
+            await flow_manager.set_node_from_config(reception_offered_node())
+            return
+
         if closing_mute.closing or message.interrupted or not is_closing_utterance(content):
             return
         logger.info("Closing line spoken; muting caller and arming the hang-up timer")
