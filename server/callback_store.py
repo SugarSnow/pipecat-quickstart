@@ -78,6 +78,29 @@ def has_expected_digit_count(phone_number: str) -> bool:
     return len(digits) == expected_digit_count(phone_number)
 
 
+# A number more than two digits short is still being read out; one or two digits
+# short is a number that was finished and came out wrong.
+_FRAGMENT_MARGIN = 2
+
+
+def is_partial_phone_number(phone_number: str) -> bool:
+    """Whether *phone_number* looks like a number still being read out.
+
+    Someone reading a number off a screen says it in pieces, and asking them to
+    start over after three digits is never right. Where exactly the line falls
+    is a judgement, so it is made here rather than left to the LLM, which called
+    three digits complete.
+
+    Args:
+        phone_number: The digits heard so far.
+
+    Returns:
+        True when more digits are expected than a slip would account for.
+    """
+    digits = re.sub(r"\D", "", phone_number)
+    return len(digits) <= expected_digit_count(phone_number) - _FRAGMENT_MARGIN
+
+
 def save_callback_request(
     name: str,
     phone_number: str,

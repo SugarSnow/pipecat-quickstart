@@ -63,7 +63,11 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
 from call_record_store import save_call_record
-from callback_store import has_expected_digit_count, save_callback_request
+from callback_store import (
+    has_expected_digit_count,
+    is_partial_phone_number,
+    save_callback_request,
+)
 
 load_dotenv(override=True)
 
@@ -97,6 +101,9 @@ FAREWELL_LINE = "それでは失礼いたします。"
 
 # Spoken when the digits do not add up, in place of a read-back.
 RE_ASK_NUMBER_LINE = "恐れ入ります、お電話番号をもう一度最初からお願いできますか。"
+
+# Spoken while the caller is still reading their number out.
+ACKNOWLEDGE_LINE = "はい。"
 
 # How long to hold the line after the closing before hanging up.
 CLOSING_SILENCE_SECS = 3.0
@@ -245,6 +252,7 @@ RECEPTION_TASK = f"""\
 折り返しのご案内は、1回の電話の中で一度だけです。一度ご案内したあとは、答えられないことが続いても、断りの文言だけで返答を終えてください。
 2回目以降は「{CALLBACK_OFFER_LINE}」と言ってはいけません。「いかがなさいますか」と尋ね直すこともしないでください。
 相手が折り返しを希望すると言ったときだけ、start_callback を呼んでください。
+相手が自分から折り返しを申し出たとき（「名前と電話番号を伝えてもいいですか」「折り返してもらえますか」「電話がほしいです」など）は、断りの文言を言わずに、すぐ start_callback を呼んでください。もう希望していると分かっているので、希望するかどうかを尋ね直す必要もありません。
 start_callback を呼ぶときは、その返答では何も言わないでください。相槌も、お名前や電話番号を尋ねる言葉も入れず、関数を呼ぶだけにしてください。お名前は関数を呼んだあとの返答で、ひとつずつ伺います。
 
 【何を聞けるかという質問】
@@ -282,6 +290,7 @@ CONFIRM_TASK = """\
 CORRECTION_TASK = """\
 【聞き直し】
 違うと言われた方だけを、ひとことで聞き直してください。もう片方はすでに聞けているので尋ねないでください。
+電話番号を聞き直しているときも、最初に伺うときと同じです。相手がまだ言い終えていない様子のとき（「ゼロハチゼロ」「六一一の」のように文が途中で切れているとき）は、「はい」とだけ返して続きを待ってください。「その後の番号をお願いします」のように言葉を足さないでください。相手の続きとかぶります。
 聞き直した方を聞き取れたら、お名前なら confirm_name に、電話番号なら confirm_phone_number に、その1つだけを渡してください。
 渡すのは、いま聞き直して新しく聞き取れた方です。前に聞いていた古い値を渡してはいけません。相手が「佐藤祐希です」と言い直したなら、渡すのは「佐藤祐希」です。
 電話番号は数字だけにしてください。復唱はこちらで読み上げるので、あなたは復唱しないでください。
@@ -363,6 +372,24 @@ def phone_correction_node() -> NodeConfig:
     }
 
 
+def number_fragment_node() -> NodeConfig:
+    """まだ読み上げ途中の番号を、相槌だけ返して待つ。
+
+    The caller is mid-number, so the only right answer is "はい" and silence.
+    Said as a fixed line for the same reason as the read-back: the model, left
+    to word this itself, answered "ありがとうございます、その後の番号をお願い
+    します" and talked over the next few digits.
+    """
+    return {
+        "name": "number_fragment",
+        "role_message": ROLE_MESSAGE + CORRECTION_TASK,
+        "task_messages": [{"role": "developer", "content": "番号の続きを待ってください。"}],
+        "pre_actions": [{"type": "tts_say", "text": ACKNOWLEDGE_LINE}],
+        "respond_immediately": False,
+        "functions": [confirm_phone_number],
+    }
+
+
 def number_retry_node() -> NodeConfig:
     """桁数が合わない番号を、復唱せずに聞き直す。
 
@@ -400,6 +427,10 @@ def _confirm(flow_manager: FlowManager, **details: str) -> NodeConfig:
     flow_manager.state.update(details)
     name = flow_manager.state.get("name", "")
     phone_number = flow_manager.state.get("phone_number", "")
+
+    if is_partial_phone_number(phone_number):
+        logger.info(f"Phone number is still coming ({phone_number}); waiting for the rest")
+        return number_fragment_node()
 
     if not has_expected_digit_count(phone_number):
         logger.info(f"Phone number has the wrong digit count ({phone_number}); asking again")
