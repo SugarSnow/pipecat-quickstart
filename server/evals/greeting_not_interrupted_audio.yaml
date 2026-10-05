@@ -1,0 +1,51 @@
+# The greeting survives a caller who starts talking into it.
+#
+# From a phone test: the bot composed its greeting with the LLM, the caller
+# spoke before it had finished generating, the VAD broadcast an interruption,
+# and the greeting was cancelled — the bot never said which clinic it was. The
+# fix is two halves, and only audio can see either: the line is now a fixed
+# tts_say (invisible to a text-mode run, which drops bot-tts-text), and the
+# caller is muted from connect until it has been spoken in full (a text-mode
+# turn arrives as an LLMMessagesAppendFrame, which never passes the mute gate
+# this is about).
+name: greeting_not_interrupted_audio
+
+user:
+  modality: audio
+  speech:
+    service: cartesia
+    voice: 86e30c1d-714b-4074-a1f2-1cb6b552fb49
+    language: ja
+    # 8 kHz to match the bot's Twilio pipeline; at the harness default of 16 kHz
+    # the bot's STT returns nothing at all.
+    sample_rate: 8000
+
+judge: !include judge_audio.yaml
+
+turns:
+  # Spoken straight away, with no send_after, so it lands while the greeting is
+  # still playing — the barge-in the fix is about. The caller is muted at this
+  # point, so this should reach neither the STT nor the LLM.
+  - user: "もしもし、すみません"
+    expect:
+      # The whole greeting, judged on its two ends: naming the clinic is the
+      # part the broken call lost first, and the closing question is the part a
+      # cancelled line would cut. Asked about what was said rather than how it
+      # was spelled, because 8 kHz Whisper writes さくら歯科 as 桜市科 about as
+      # often as not.
+      - event: response
+        eval: >-
+          電話を受けた挨拶として、クリニックの名前を名乗り、
+          そのうえで用件を尋ねるところまで言い切っている。
+          名前の表記が正確かどうかは判断しない。
+
+  # The mute lifts when the greeting ends, so an ordinary turn works from here.
+  # This is also what proves the caller was muted rather than merely ignored: a
+  # bot that had answered "もしもし、すみません" would have nothing to say about
+  # opening hours now.
+  - user: "何時までやっていますか"
+    send_after:
+      delay_ms: 2000
+    expect:
+      - event: response
+        eval: "平日は午後6時まで、土曜は午後1時までという趣旨を答えている"

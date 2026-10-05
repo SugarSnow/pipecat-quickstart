@@ -8,10 +8,11 @@ name: callback_requested_directly
 judge: !include judge_text.yaml
 
 turns:
-  - expect:
-      - event: response
-        eval: "さくら歯科クリニックと名乗って挨拶し、用件を尋ねている"
-
+  # Nothing is asserted about the greeting here. It is a fixed line spoken as a
+  # tts_say pre-action, and a text-mode run cannot see it: the harness drops
+  # bot-tts-text unless the bot is really speaking. Its wording is pinned in
+  # tests/test_greeting.py, and greeting_not_interrupted_audio covers it being
+  # spoken in full over a caller who starts early.
   # The caller asks for the callback themselves. Straight to the flow: the call
   # going through start_callback in this turn is what says the refusal path was
   # not taken.

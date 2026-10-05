@@ -25,6 +25,7 @@ suite:
       - callback_requested_directly
       - closing_hangup_audio
       - closing_no_reply_after_farewell
+      - greeting_not_interrupted_audio
       - in_scope_answers
       - in_scope_unknown_wording
       - out_of_scope_callback_offer
