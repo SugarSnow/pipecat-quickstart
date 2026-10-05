@@ -82,6 +82,7 @@ from callback_store import (
     merge_phone_number,
     save_callback_request,
 )
+from silent_tts import SilentTTSService
 
 load_dotenv(override=True)
 
@@ -742,6 +743,24 @@ async def record_callback(flow_manager: FlowManager) -> ConsolidatedFunctionResu
     return {"saved": True}, closing_node()
 
 
+def _wants_silent_tts(runner_args: RunnerArguments) -> bool:
+    """Whether this run should skip synthesis entirely.
+
+    Read from the runner body, which ``pipecat eval suite`` fills from the
+    manifest entry's ``runner_body``. That is the only per-scenario channel the
+    suite has — its ``spawn`` template is shared by every run — so it is how the
+    text-mode scenarios ask for a silent bot while the audio ones keep Cartesia.
+
+    Args:
+        runner_args: The session arguments the runner handed this bot.
+
+    Returns:
+        True when the run wants no audio synthesized.
+    """
+    body = runner_args.body
+    return bool(isinstance(body, dict) and body.get("silent_tts"))
+
+
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
     """Run the voice bot for this session.
 
@@ -764,15 +783,24 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         ),
     )
 
-    # Text-to-Speech service
-    tts = CartesiaTTSService(
-        api_key=os.getenv("CARTESIA_API_KEY"),
-        settings=CartesiaTTSService.Settings(
-            voice=os.getenv("CARTESIA_VOICE_ID", "86e30c1d-714b-4074-a1f2-1cb6b552fb49"),
-            language="ja",
-            model="sonic-3.5",
-        ),
-    )
+    # Text-to-Speech service. A text-mode eval scenario never listens to the
+    # bot, so it asks (through the manifest's runner_body) for the silent
+    # service instead and the run costs no Cartesia at all. The decision has to
+    # be made here rather than from the eval transport's connect-time skip_tts
+    # flag, because CartesiaTTSService opens its websocket as the pipeline
+    # starts — long before a client connects.
+    if _wants_silent_tts(runner_args):
+        logger.info("Silent TTS: this run synthesizes nothing")
+        tts = SilentTTSService()
+    else:
+        tts = CartesiaTTSService(
+            api_key=os.getenv("CARTESIA_API_KEY"),
+            settings=CartesiaTTSService.Settings(
+                voice=os.getenv("CARTESIA_VOICE_ID", "86e30c1d-714b-4074-a1f2-1cb6b552fb49"),
+                language="ja",
+                model="sonic-3.5",
+            ),
+        )
 
     # LLM service
     llm = OpenAIResponsesLLMService(

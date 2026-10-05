@@ -6,6 +6,10 @@
 
 - `pipecat eval suite` の `-s` は複数指定すると最後の1つしか効かない。複数のシナリオを
   指定したいときは1本ずつ実行する
+- `callback_offer_not_repeated` は元から2割ほど落ちる。「2回目は折り返しを
+  申し出ない」をプロンプトだけで守らせているため。TTS を無音に差し替えた前後で
+  それぞれ8回ずつ回して 6/8 と 7/8 で、差し替えとは関係ない（2026-10-05）。
+  全件1回で通ったからといって安定しているとは限らない
 - 全件を1回流すだけでも OpenAI の TPM 上限（gpt-4.1 で30k）に当たるようになった
   （シナリオ11本・約3分20秒の時点）。毎回ちがうシナリオが犠牲になるので、
   落ちた1本を `-s` で単独実行して判定の失敗と切り分ける
@@ -35,6 +39,22 @@
   RTVI から直接コンテキストに入る（`rtvi/processor.py` の `_handle_send_text`）。
   そのため user mute strategy では止まらず、`run_immediately` で `interrupt_bot()` も
   呼ばれる。ミュートの挙動を eval で見たいときは audio モードを使う
+
+## eval での TTS
+
+- テキストモードでも `tts_say` は実際の TTS を通る。ハーネスが接続時に送る
+  `skip_tts` は LLM の出力にしか効かない。固定文言を tts_say に移すたび
+  Cartesia の消費が増える
+- 偽の TTS に差し替えるときは、**無音の音声フレームを1つ返す**。何も返さないと
+  `TTSService` が「リクエストを受けて何も喋らないプロバイダ」とみなし、
+  毎回エラーを push したうえ3回で service を unusable にして以降を黙らせる
+  （`max_consecutive_zero_audio_contexts`）。`TTSSettings(model=None,
+  voice=None, language=None)` も渡す。未設定だと起動時にフィールドごとに
+  ERROR が出る
+- シナリオごとにボットの作り方を変えたいときは manifest の `runner_body`。
+  `spawn` は manifest 全体で1つだが、`bot` と `runner_body` は suite の
+  エントリごとに指定でき、JSON が `runner_args.body` に入る。サービスの
+  組み立ては接続前なので、eval transport の接続時フラグでは間に合わない
 
 ## audio モードの eval
 
