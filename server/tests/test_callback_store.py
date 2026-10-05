@@ -8,6 +8,7 @@ import pytest
 from callback_store import (
     expected_digit_count,
     has_expected_digit_count,
+    merge_phone_number,
     normalize_phone_number,
     read_callback_requests,
     save_callback_request,
@@ -122,3 +123,32 @@ def test_the_count_is_of_digits_not_characters():
     """The caller's grouping is theirs; only the digits decide."""
     assert has_expected_digit_count("080 1234 5678")
     assert has_expected_digit_count("（03）1234-5678")
+
+
+# --- assembling a number read out in pieces ---------------------------------
+#
+# The model passes sometimes the new piece and sometimes everything so far; the
+# caller said the same thing either way, so both have to land the same.
+
+
+@pytest.mark.parametrize(
+    ("collected", "heard", "expected"),
+    [
+        # Nothing yet: whatever arrives is the number so far.
+        ("", "080", "080"),
+        # The new piece only.
+        ("080", "1234", "0801234"),
+        ("0801234", "5678", "08012345678"),
+        # Everything so far, repeated.
+        ("080", "0801234", "0801234"),
+        ("0801234", "08012345678", "08012345678"),
+        # The same piece twice — a stutter, not more digits.
+        ("080", "080", "080"),
+        # Nothing new at all.
+        ("08012345678", "", "08012345678"),
+        # Non-digits are dropped on the way in, as everywhere else.
+        ("080", "1234の", "0801234"),
+    ],
+)
+def test_merge_phone_number(collected, heard, expected):
+    assert merge_phone_number(collected, heard) == expected

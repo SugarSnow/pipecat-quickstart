@@ -1,0 +1,28 @@
+# An offer the caller never heard the end of has not been made.
+#
+# Interrupted bot speech reaches the context truncated — only what was actually
+# played is kept — so the offer below stops mid-sentence, exactly as it does
+# after a barge-in. The bot must treat that as "not yet offered" and say the
+# whole line, rather than counting it against its one-offer-per-call rule and
+# answering with the refusal alone.
+#
+# Seeded with `context:` rather than acted out: a text-mode turn cannot be cut
+# off part-way, since there is no audio to interrupt.
+name: truncated_offer_repeated
+
+judge: !include judge_text.yaml
+
+context:
+  - role: user
+    content: "予約を取りたいんですけど"
+  # Cut where the phone test's noise cut it: the refusal landed, the offer did
+  # not finish, and "いかがなさいますか" never reached the caller.
+  - role: assistant
+    content: "申し訳ございませんが、営業時間、休診日、場所のご案内以外はお答えいたしかねます。担当者から折り返し"
+
+turns:
+  - user: "え、途中で切れました"
+    expect:
+      # The offer in full, from the start — not continued from "担当者から折り返し".
+      - event: response
+        text_contains: "担当者から折り返しご連絡することもできますが、いかがなさいますか"

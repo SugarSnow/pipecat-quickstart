@@ -101,6 +101,36 @@ def is_partial_phone_number(phone_number: str) -> bool:
     return len(digits) <= expected_digit_count(phone_number) - _FRAGMENT_MARGIN
 
 
+def merge_phone_number(collected: str, heard: str) -> str:
+    """Combine the digits collected so far with the next thing heard.
+
+    Someone reading a number off a screen says it in pieces, and the model is
+    free to hand over either the new piece ("5678") or everything so far
+    ("08012345678") — the prompt asks for one, the conversation suggests the
+    other, and which one arrives varies run to run. Both mean the same thing to
+    the caller, so both are made to mean the same thing here.
+
+    Args:
+        collected: Digits already gathered for this number.
+        heard: What the model just passed in.
+
+    Returns:
+        The number as it stands after this piece.
+    """
+    collected = re.sub(r"\D", "", collected)
+    heard = re.sub(r"\D", "", heard)
+
+    if not collected:
+        return heard
+    # The whole number again, not just the new part.
+    if heard.startswith(collected):
+        return heard
+    # Nothing new in it; keep what we have rather than going backwards.
+    if collected.startswith(heard):
+        return collected
+    return collected + heard
+
+
 def save_callback_request(
     name: str,
     phone_number: str,

@@ -42,10 +42,15 @@ from pipecat.flows import (
     flows_tool_options,
 )
 from pipecat.frames.frames import (
+    BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
     Frame,
+    InterimTranscriptionFrame,
+    TranscriptionFrame,
     TTSSpeakFrame,
     UserIdleTimeoutUpdateFrame,
+    VADUserStartedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
@@ -62,7 +67,10 @@ from pipecat.services.openai.responses.llm import OpenAIResponsesLLMService
 from pipecat.transports.base_transport import BaseTransport
 from pipecat.transports.websocket.fastapi import FastAPIWebsocketParams
 from pipecat.turns.user_mute.base_user_mute_strategy import BaseUserMuteStrategy
-from pipecat.turns.user_start import VADUserTurnStartStrategy
+from pipecat.turns.types import ProcessFrameResult
+from pipecat.turns.user_start.base_user_turn_start_strategy import (
+    BaseUserTurnStartStrategy,
+)
 from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
@@ -71,6 +79,7 @@ from call_record_store import save_call_record
 from callback_store import (
     has_expected_digit_count,
     is_partial_phone_number,
+    merge_phone_number,
     save_callback_request,
 )
 
@@ -287,6 +296,125 @@ class OpeningUserMuteStrategy(BaseUserMuteStrategy):
         return True
 
 
+# Below this, a caller talking over the bot is taken for a backchannel rather
+# than an interruption. Counted in characters, not words: Japanese transcripts
+# come back with few or no spaces ("何時までやっていますか。" is one "word" to
+# str.split), so the framework's MinWordsUserTurnStartStrategy can never reach
+# a threshold above 1 here.
+#
+# Six keeps the common acknowledgements out — はい, ええ, うん, なるほど,
+# そうですか — while letting anything with a request in it through
+# ("ちょっと待って", "もう一度お願いします"). A real interruption shorter than
+# this ("すみません") waits for the bot to finish its sentence instead, which is
+# the lesser of the two mistakes on a phone call.
+BACKCHANNEL_MAX_CHARS = 6
+
+
+class BackchannelToleranceUserTurnStartStrategy(BaseUserTurnStartStrategy):
+    """Starts a user turn on VAD, except over the bot's own speech.
+
+    Replaces VADUserTurnStartStrategy, which starts a turn — and so broadcasts
+    an interruption — the moment the VAD hears anything. On a phone line that
+    is too eager: a 0.2s noise cut the bot off mid-sentence and the caller never
+    heard the end of the callback offer.
+
+    While the bot is speaking, the VAD alone is no longer enough; a transcript
+    of at least ``min_chars`` has to arrive first. While the bot is silent,
+    nothing changes — the VAD starts the turn as immediately as before, which
+    matters for the one-word answers ("はい") the read-back depends on.
+
+    The framework's own MinWordsUserTurnStartStrategy is the same idea, but it
+    counts ``str.split()`` words and has no VAD path, so it fits neither
+    Japanese nor the latency this bot needs when the line is quiet.
+    """
+
+    def __init__(self, *, min_chars: int = BACKCHANNEL_MAX_CHARS, **kwargs):
+        """Initialize the strategy.
+
+        Args:
+            min_chars: Characters a caller must be heard saying, while the bot
+                is speaking, before it counts as an interruption.
+            **kwargs: Passed to the base strategy.
+        """
+        super().__init__(**kwargs)
+        self._min_chars = min_chars
+        self._bot_speaking = False
+        self._user_speaking = False
+        self._turn_active = False
+
+    async def handle_user_turn_started(self):
+        """Stand down: the turn this strategy was watching for has begun."""
+        self._turn_active = True
+
+    async def handle_user_turn_stopped(self):
+        """Start watching again, from the next turn's first frame."""
+        self._turn_active = False
+        self._user_speaking = False
+
+    async def process_frame(self, frame: Frame) -> ProcessFrameResult:
+        """Decide whether this frame starts a user turn.
+
+        Args:
+            frame: The frame to be analyzed.
+
+        Returns:
+            STOP when a turn was started, CONTINUE otherwise.
+        """
+        # Mid-turn, the only thing worth tracking is whether the bot is
+        # speaking. Judging transcripts here would mean calling
+        # trigger_reset_aggregation() on a turn that has already started —
+        # discarding the words it is made of.
+        if self._turn_active:
+            if isinstance(frame, BotStartedSpeakingFrame):
+                self._bot_speaking = True
+            elif isinstance(frame, BotStoppedSpeakingFrame):
+                self._bot_speaking = False
+            return ProcessFrameResult.CONTINUE
+
+        if isinstance(frame, BotStartedSpeakingFrame):
+            self._bot_speaking = True
+        elif isinstance(frame, BotStoppedSpeakingFrame):
+            self._bot_speaking = False
+            # A caller still talking when the bot finishes is taking their turn,
+            # however briefly they have been at it. Without this, speech that
+            # began as a backchannel over the bot would have no turn to belong
+            # to once the bot fell silent.
+            if self._user_speaking:
+                await self.trigger_user_turn_started()
+                return ProcessFrameResult.STOP
+        elif isinstance(frame, VADUserStartedSpeakingFrame):
+            self._user_speaking = True
+            if not self._bot_speaking:
+                await self.trigger_user_turn_started()
+                return ProcessFrameResult.STOP
+        elif isinstance(frame, VADUserStoppedSpeakingFrame):
+            self._user_speaking = False
+        elif isinstance(frame, (TranscriptionFrame, InterimTranscriptionFrame)):
+            if self._bot_speaking:
+                return await self._handle_transcription(frame)
+
+        return ProcessFrameResult.CONTINUE
+
+    async def _handle_transcription(
+        self, frame: TranscriptionFrame | InterimTranscriptionFrame
+    ) -> ProcessFrameResult:
+        """Weigh a transcript heard over the bot against the backchannel threshold."""
+        # Whitespace only: Deepgram puts a space between a surname and a given
+        # name but not between words, so stripping it is the whole of what
+        # "characters actually said" means here.
+        spoken = "".join(frame.text.split())
+        if len(spoken) >= self._min_chars:
+            logger.debug(f"Interrupting on {len(spoken)} chars over the bot: {spoken!r}")
+            await self.trigger_user_turn_started()
+            return ProcessFrameResult.STOP
+
+        # Discard it, the way the framework's min-words strategy does: an
+        # acknowledgement should not be waiting in the aggregator to be answered
+        # as a turn of its own once the bot stops.
+        await self.trigger_reset_aggregation()
+        return ProcessFrameResult.CONTINUE
+
+
 # The system instruction, set once and kept for the whole call: who the bot is
 # and how it speaks. Flows pushes this when the first node is set and leaves it
 # in place until a node names a new one.
@@ -299,7 +427,11 @@ ROLE_MESSAGE = """\
 文の途中に半角スペースを入れないでください。区切りたいときは読点を使ってください。
 人名も姓と名の間にスペースを入れず続けて書いてください。
 クリニック名を名乗るのは最初の挨拶のときだけです。それ以降の返答では名乗らないでください。
-相手が「なるほど」「そうですか」のように受け答えだけをしたときは、「はい」「かしこまりました」のようにひとことで短く受けてください。直前に答えた内容を言い直したり、ご案内できる話題を並べ直したり、ほかにご用はないかと尋ねたりしないでください。
+相手が「なるほど」「そうですか」のように受け答えだけをしたときは、「はい」「かしこまりました」のようにひとことで短く受けてください。直前に答えた内容を言い直したり、ご案内できる話題を並べ直したり、ほかにご用はないかと尋ねたりしないでください。ただし次の【言い直し】にあてはまるときは、この決まりより【言い直し】を優先してください。
+
+【言い直し】
+相手が「途中で切れました」「何て言いました」「もう一度お願いします」「聞こえませんでした」のように聞き返したときは、直前のあなたの発言を最初から言い直してください。「はい」のような短い受け答えで済ませてはいけません。
+直前の発言が途中で切れていたときも、切れたところからではなく、最初から言い直してください。
 
 【聞き取れないとき】
 相手の発話が聞き取れない、または意味が通らないときは、推測で解釈せず「恐れ入ります、もう一度お願いできますか」と聞き返してください。
@@ -330,6 +462,7 @@ RECEPTION_TASK = f"""\
 
 【折り返しのご案内は一度だけ】
 折り返しのご案内は、1回の電話の中で一度だけです。一度ご案内したあとは、答えられないことが続いても、断りの文言だけで返答を終えてください。
+ただし、ご案内が「いかがなさいますか」まで言い終わらずに途中で切れていたときは、まだご案内していないものとして扱ってください。その場合は「{CALLBACK_OFFER_LINE}」を最初から最後まで言い直してください。
 2回目以降は「{CALLBACK_OFFER_LINE}」と言ってはいけません。「いかがなさいますか」と尋ね直すこともしないでください。
 相手が折り返しを希望すると言ったときだけ、start_callback を呼んでください。
 相手が自分から折り返しを申し出たとき（「名前と電話番号を伝えてもいいですか」「折り返してもらえますか」「電話がほしいです」など）は、断りの文言を言わずに、すぐ start_callback を呼んでください。もう希望していると分かっているので、希望するかどうかを尋ね直す必要もありません。
@@ -512,6 +645,13 @@ def _confirm(flow_manager: FlowManager, **details: str) -> NodeConfig:
     everything else 10, and a number that does not add up is asked for again
     instead of being read back.
     """
+    # A number read out in pieces is assembled here rather than left to the
+    # model, which passes sometimes the new piece and sometimes the whole number
+    # so far. Merging makes the two indistinguishable.
+    if "phone_number" in details:
+        details["phone_number"] = merge_phone_number(
+            flow_manager.state.get("phone_number", ""), details["phone_number"]
+        )
     flow_manager.state.update(details)
     name = flow_manager.state.get("name", "")
     phone_number = flow_manager.state.get("phone_number", "")
@@ -522,6 +662,9 @@ def _confirm(flow_manager: FlowManager, **details: str) -> NodeConfig:
 
     if not has_expected_digit_count(phone_number):
         logger.info(f"Phone number has the wrong digit count ({phone_number}); asking again")
+        # Cleared so the next attempt is assembled from scratch: these digits
+        # are known to be wrong, and merging onto them would carry the mistake.
+        flow_manager.state["phone_number"] = ""
         return number_retry_node()
 
     logger.info(f"Reading back: {name} / {phone_number}")
@@ -581,6 +724,8 @@ async def correct_name(flow_manager: FlowManager) -> ConsolidatedFunctionResult:
 async def correct_phone_number(flow_manager: FlowManager) -> ConsolidatedFunctionResult:
     """電話番号が違うと言われたときに呼んでください。電話番号だけを聞き直します。"""
     logger.info("Caller says the number is wrong; asking for it again")
+    # The number just rejected must not be merged into what comes next.
+    flow_manager.state["phone_number"] = ""
     return None, phone_correction_node()
 
 
@@ -670,14 +815,15 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             # costs nothing to fix, since 0.15s runs inside the 0.8s below.
             vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
             user_turn_strategies=UserTurnStrategies(
-                # VAD-only start: TranscriptionUserTurnStartStrategy (the other
-                # default) fires trigger_user_turn_started() — which broadcasts
-                # an interruption — on every interim transcript, fragmenting
-                # one utterance into multiple user turns with assistant
-                # one-character fragments spliced in between. VADUserTurnStartStrategy
-                # still broadcasts an interruption on VADUserStartedSpeakingFrame
-                # (enable_interruptions defaults to True), so barge-in is unaffected.
-                start=[VADUserTurnStartStrategy()],
+                # VAD-driven, like the plain VADUserTurnStartStrategy this
+                # started as, and for the same reason:
+                # TranscriptionUserTurnStartStrategy (the other default) fires
+                # on every interim transcript, fragmenting one utterance into
+                # several turns with assistant one-character fragments spliced
+                # in between. What this adds is a threshold over the bot's own
+                # speech, so a cough or a "はい" no longer cuts it off — see the
+                # strategy's own docstring.
+                start=[BackchannelToleranceUserTurnStartStrategy()],
                 # 0.8 rather than the default 0.6: this is the half of the wait
                 # a caller can still interrupt, so the 0.8s the VAD gave up above
                 # is better spent here. A 1.4s pause mid-sentence was measured in
