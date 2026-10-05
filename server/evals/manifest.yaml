@@ -33,4 +33,6 @@ suite:
       - phone_number_digit_count
       - phone_number_landline
       - phone_number_no_completion
+      - repeat_on_request
       - scope_question_not_refused
+      - truncated_offer_repeated

@@ -59,8 +59,12 @@ turns:
     send_after:
       delay_ms: 2000
 
-  # Finished this time, and the digits add up. Whichever way the pieces were
-  # handled, this is where the whole number reaches the flow.
+  # Finished this time, and the digits add up. The call is asserted, its
+  # arguments are not: the model passes the new piece ("5678") on some runs and
+  # the whole number so far ("08012345678") on others, and the flow merges the
+  # two into the same thing. Pinning one of them here only pins which habit the
+  # model happened to have — the number the flow actually assembles is checked
+  # in tests/test_confirm_routing.py.
   - user: "五六七八です"
     send_after:
       delay_ms: 2000
@@ -68,7 +72,6 @@ turns:
       - event: function_call
         calls:
           - name: confirm_phone_number
-            args: { phone_number: "08012345678" }
       - event: function_call
         absent: true
         within_ms: 4000

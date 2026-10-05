@@ -1,0 +1,39 @@
+# Asked to say it again, the bot says it again.
+#
+# From a phone test: the refusal and the callback offer were cut off by a 0.2s
+# noise, so "いかがなさいますか" never arrived. The caller asked "途中で切れた"
+# and then "何て言いました?", and both times got "はい。" back — the backchannel
+# rule in the system instruction swallowing a genuine request. The caller hung
+# up. The rule now has an explicit exception for being asked to repeat.
+name: repeat_on_request
+
+judge: !include judge_text.yaml
+
+turns:
+  # Nothing is asserted about the greeting here. It is a fixed line spoken as a
+  # tts_say pre-action, and a text-mode run cannot see it: the harness drops
+  # bot-tts-text unless the bot is really speaking. Its wording is pinned in
+  # tests/test_greeting.py, and greeting_not_interrupted_audio covers it being
+  # spoken in full over a caller who starts early.
+  - user: "予約を取りたいんですけど"
+    expect:
+      - event: response
+        text_contains: "いかがなさいますか"
+
+  # The whole offer again, not an acknowledgement. Checked with text_contains
+  # against the fixed line rather than put to the judge: there is nothing to
+  # weigh up, and a judge asked whether the bot "repeated itself" has said yes
+  # about a bare "はい。" before.
+  - user: "すみません、何て言いました"
+    expect:
+      - event: response
+        text_contains: "担当者から折り返しご連絡することもできますが、いかがなさいますか"
+
+  # A second phrasing, because the first one could pass on the word 何て alone.
+  # Also the backchannel rule's own territory — "もう一度お願いします" is short
+  # and contentless in the way "なるほど" is — so this is the turn that shows
+  # the exception is read as an exception.
+  - user: "もう一度お願いします"
+    expect:
+      - event: response
+        text_contains: "担当者から折り返しご連絡することもできますが、いかがなさいますか"

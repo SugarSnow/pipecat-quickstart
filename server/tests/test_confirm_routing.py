@@ -66,3 +66,46 @@ def test_what_was_heard_is_remembered_across_the_pieces():
     _confirm(flow, phone_number="08012345678")
 
     assert flow.state == {"name": "佐藤", "phone_number": "08012345678"}
+
+
+# --- a number read out in pieces --------------------------------------------
+#
+# The eval cannot check this: its only handle on a turn is the arguments the
+# model passed, and the whole point is that those vary — sometimes the new
+# piece, sometimes everything so far. What matters is where the flow ends up.
+
+
+def _read_out(pieces: list[str], **state) -> str:
+    """Feed *pieces* to _confirm one at a time; return the number it assembled."""
+    flow = _flow(name="佐藤", **state)
+    for piece in pieces:
+        _confirm(flow, phone_number=piece)
+    return flow.state["phone_number"]
+
+
+def test_pieces_accumulate():
+    """The model hands over each new piece as it is heard."""
+    assert _read_out(["080", "1234", "5678"]) == "08012345678"
+
+
+def test_a_repeated_whole_number_does_not_double_up():
+    """The same caller, the same digits, the other thing the model does."""
+    assert _read_out(["080", "0801234", "08012345678"]) == "08012345678"
+
+
+def test_the_two_habits_mix():
+    """Whichever it does on any given turn, the number comes out the same."""
+    assert _read_out(["080", "0801234", "5678"]) == "08012345678"
+
+
+def test_a_rejected_number_is_not_merged_into_the_next_one():
+    """A wrong digit count clears the slate, so the retry starts from nothing."""
+    flow = _flow(name="佐藤")
+    # Ten digits behind a mobile prefix: wrong, and asked for again.
+    assert _confirm(flow, phone_number="0801234567")["name"] == "number_retry"
+    assert flow.state["phone_number"] == ""
+
+    _confirm(flow, phone_number="080")
+    _confirm(flow, phone_number="12345678")
+
+    assert flow.state["phone_number"] == "08012345678"
