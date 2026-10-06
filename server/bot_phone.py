@@ -83,6 +83,7 @@ from callback_store import (
     save_callback_request,
 )
 from silent_tts import SilentTTSService
+from text_cleanup import CollapseRepeatedPunctuation
 
 load_dotenv(override=True)
 
@@ -952,6 +953,10 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             stt,
             user_aggregator,
             llm,
+            # Between the LLM and the TTS on purpose: the TTS splits text into
+            # sentences before its own text_transforms run, by which point a
+            # run of 。 has already become separate chunks to speak.
+            CollapseRepeatedPunctuation(),
             tts,
             transport.output(),
             assistant_aggregator,
