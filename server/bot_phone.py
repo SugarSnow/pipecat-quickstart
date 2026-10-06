@@ -83,6 +83,7 @@ from callback_store import (
     save_callback_request,
 )
 from silent_tts import SilentTTSService
+from tenant_config import TENANT, clinic_info_text, keyterms
 from text_cleanup import CollapseRepeatedPunctuation
 
 load_dotenv(override=True)
@@ -94,13 +95,10 @@ load_dotenv(override=True)
 # No half-width spaces, here or in the label separators: Cartesia's Japanese word
 # timestamps drop them, which desynchronises the text the assistant aggregator
 # rebuilds and corrupts the stored turn. See tests/test_cartesia_ja_space_corruption.py.
-CLINIC_INFO = """\
-クリニック名:さくら歯科クリニック
-営業時間:平日は午前9時から午後6時まで、土曜は午前9時から午後1時まで
-休診日:日曜と祝日
-場所:東京都調布市小島町1丁目2番3号、さくらビル2階
-アクセス:京王線、調布駅中央口から徒歩5分
-"""
+CLINIC_INFO = clinic_info_text(TENANT)
+
+# The words this clinic's callers actually say, boosted in the speech-to-text.
+KEYTERMS = keyterms(TENANT)
 
 # Lines the bot must say verbatim. Kept as constants so the wording is in one
 # place, and (for the closing line) so code can recognise it.
@@ -133,6 +131,15 @@ GREETING_LINE = (
 
 # How long to hold the line after the closing before hanging up.
 CLOSING_SILENCE_SECS = 3.0
+
+# Spoken once when the caller says nothing to the read-back. A phone test sat
+# through 33 seconds of silence there: the caller had not realised a reply was
+# wanted, and the bot had nothing that would make it ask.
+READBACK_NUDGE_LINE = "よろしいでしょうか。"
+
+# How long to wait for that reply. Long enough to be reading a number back off a
+# screen or thinking, short enough that the pause does not become a dead line.
+READBACK_SILENCE_SECS = 8.0
 
 
 # How each digit is read out loud. 0 and 4 and 7 have a second reading that is
@@ -738,6 +745,9 @@ def _confirm(flow_manager: FlowManager, **details: str) -> NodeConfig:
         return number_retry_node()
 
     logger.info(f"Reading back: {name} / {phone_number}")
+    # Each read-back gets its own nudge: a corrected number is read back again,
+    # and the caller can just as easily miss their cue the second time.
+    flow_manager.state["readback_nudged"] = False
     return callback_confirm_node(name, phone_number)
 
 
@@ -849,6 +859,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         settings=DeepgramSTTService.Settings(
             model="nova-3",
             language="ja",
+            # The clinic's own name and the handful of words the call turns on.
+            # Read from config/tenant.json rather than written here, so a second
+            # clinic is a second file. Deepgram weights these without forcing
+            # them, so a caller who says something else is still heard.
+            keyterm=KEYTERMS,
         ),
     )
 
@@ -936,10 +951,13 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             # Released as soon as that first bot speech finishes, so later turns
             # barge-in normally. closing_mute takes over at the other end.
             user_mute_strategies=[OpeningUserMuteStrategy(), closing_mute],
-            # Idle detection stays off for the conversation itself: a caller who
-            # goes quiet mid-call is thinking, not finished. It is armed with a
-            # UserIdleTimeoutUpdateFrame once the closing line is spoken.
-            user_idle_timeout=0,
+            # A caller who goes quiet mid-call is usually thinking, not
+            # finished, so most of the conversation ignores this entirely —
+            # on_user_turn_idle returns without doing anything. The one place
+            # it acts is the read-back, where silence means the caller is
+            # waiting on the bot rather than the other way round. The closing
+            # replaces this with its own, shorter timeout.
+            user_idle_timeout=READBACK_SILENCE_SECS,
         ),
     )
     # The flow manager wants the pair (it reaches for .user() and .assistant());
@@ -1026,14 +1044,29 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
     @user_aggregator.event_handler("on_user_turn_idle")
     async def on_user_turn_idle(aggregator):
-        # Only reachable in the closing state, since that is the only time the
-        # idle timeout is non-zero.
+        # Fires wherever the caller falls quiet, which is most of the call and
+        # almost always fine — they are thinking. Two places it means something.
+        nonlocal hanging_up
+
+        if not closing_mute.closing:
+            # Waiting on an answer to the read-back. Silence here is the caller
+            # not realising it was their turn, so say so — once per read-back,
+            # which is what the flag counts.
+            if flow_manager.current_node == "callback_confirm" and not flow_manager.state.get(
+                "readback_nudged"
+            ):
+                logger.info("No reply to the read-back; asking once")
+                flow_manager.state["readback_nudged"] = True
+                await worker.queue_frames([TTSSpeakFrame(READBACK_NUDGE_LINE)])
+            # Anywhere else, let the caller think.
+            return
+
+        # Past the closing line: the call is over bar the hang-up.
         #
         # Once, though: the goodbye below is itself bot speech, so the caller goes
         # quiet after it too and the timer arms again. Whether that second firing
         # gets as far as speaking depends on how long the pipeline takes to end —
         # a race that would have the bot say goodbye twice.
-        nonlocal hanging_up
         if hanging_up:
             return
         hanging_up = True

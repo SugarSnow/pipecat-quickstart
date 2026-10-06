@@ -1,0 +1,56 @@
+# Say nothing to the read-back and the bot asks whether it has it right.
+#
+# From a phone test: the bot read the details back, the caller did not realise a
+# reply was wanted, and the two of them sat in silence for 33 seconds.
+#
+# Audio mode because this is about silence. A text-mode turn is an injected
+# message with no sound either side of it, so the bot's idle timer — which runs
+# off VAD and its own speech — never gets a quiet line to measure. The nudge is
+# also a tts_say, which a text-mode run cannot observe at all.
+name: readback_nudge_audio
+
+user:
+  modality: audio
+  speech:
+    service: cartesia
+    voice: 86e30c1d-714b-4074-a1f2-1cb6b552fb49
+    language: ja
+    # 8 kHz to match the bot's Twilio pipeline; at 16 kHz its STT hears nothing.
+    sample_rate: 8000
+
+judge: !include judge_audio.yaml
+
+turns:
+  - user: "折り返しの連絡をお願いしたいんですけど"
+    send_after:
+      delay_ms: 6000
+    expect:
+      - event: response
+        eval: "お名前を尋ねている"
+
+  - user: "佐藤と申します"
+    expect:
+      - event: response
+        eval: "お電話番号を尋ねている"
+
+  # The read-back follows this, and then nothing is sent: the scenario ends with
+  # the caller saying nothing at all, which is the whole point.
+  #
+  # Both expectations live on this turn rather than one of their own, because an
+  # expectation only matches what arrives after it starts waiting — and a turn
+  # that sends nothing would start waiting too late to see the read-back.
+  - user: "ゼロハチゼロの、イチニサンヨンの、ゴロクナナハチです"
+    expect:
+      # The read-back. Indifferent to the digits: the bot reads them out one at
+      # a time and Whisper writes them back as it pleases, which is
+      # phone_number_no_completion's business, in text mode, with no judge.
+      - event: response
+        eval: >-
+          電話番号らしい数字を復唱して、これでよいか尋ねている。
+          読み上げた数字が聞き取った番号と一致しているかどうかは判断しない。
+      # Then the silence, and the nudge at the end of it. 8s of quiet plus the
+      # time to speak and transcribe it; 30s leaves room without waiting out the
+      # harness's own default.
+      - event: response
+        within_ms: 30000
+        eval: "返事がないので、よろしいかどうかをもう一度尋ねている"
