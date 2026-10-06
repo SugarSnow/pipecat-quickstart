@@ -83,6 +83,7 @@ from callback_store import (
     save_callback_request,
 )
 from silent_tts import SilentTTSService
+from tenant_config import TENANT, clinic_info_text, keyterms
 from text_cleanup import CollapseRepeatedPunctuation
 
 load_dotenv(override=True)
@@ -94,13 +95,10 @@ load_dotenv(override=True)
 # No half-width spaces, here or in the label separators: Cartesia's Japanese word
 # timestamps drop them, which desynchronises the text the assistant aggregator
 # rebuilds and corrupts the stored turn. See tests/test_cartesia_ja_space_corruption.py.
-CLINIC_INFO = """\
-クリニック名:さくら歯科クリニック
-営業時間:平日は午前9時から午後6時まで、土曜は午前9時から午後1時まで
-休診日:日曜と祝日
-場所:東京都調布市小島町1丁目2番3号、さくらビル2階
-アクセス:京王線、調布駅中央口から徒歩5分
-"""
+CLINIC_INFO = clinic_info_text(TENANT)
+
+# The words this clinic's callers actually say, boosted in the speech-to-text.
+KEYTERMS = keyterms(TENANT)
 
 # Lines the bot must say verbatim. Kept as constants so the wording is in one
 # place, and (for the closing line) so code can recognise it.
@@ -861,6 +859,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         settings=DeepgramSTTService.Settings(
             model="nova-3",
             language="ja",
+            # The clinic's own name and the handful of words the call turns on.
+            # Read from config/tenant.json rather than written here, so a second
+            # clinic is a second file. Deepgram weights these without forcing
+            # them, so a caller who says something else is still heard.
+            keyterm=KEYTERMS,
         ),
     )
 
