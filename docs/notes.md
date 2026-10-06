@@ -210,7 +210,9 @@
 - Deepgram Flux はターン検出をサーバ側で行い、接続時に
   `ExternalUserTurnStrategies` を要求する。自前の `user_turn_strategies` を
   渡すとそれを上書きしてしまうので、実質は全か無か。採用すると
-  相槌の閾値・`stop_secs`・`user_speech_timeout` の調整が全部無効になる
+  相槌の閾値・`stop_secs`・`user_speech_timeout` の調整が全部無効になる。
+  この通話向けに合わせ込んだ調整を手放す変更になるため、見送りと決めた
+  （2026-10-06）。8kHz・日本語での挙動も未確認のまま
 
 ## ターン検出
 
