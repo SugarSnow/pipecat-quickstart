@@ -51,3 +51,4 @@ suite:
     scenarios:
       - closing_hangup_audio
       - greeting_not_interrupted_audio
+      - readback_nudge_audio

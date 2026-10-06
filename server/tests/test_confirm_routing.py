@@ -65,7 +65,10 @@ def test_what_was_heard_is_remembered_across_the_pieces():
     _confirm(flow, phone_number="080")
     _confirm(flow, phone_number="08012345678")
 
-    assert flow.state == {"name": "佐藤", "phone_number": "08012345678"}
+    # The two the caller gave, rather than the whole dict: the flow keeps other
+    # bookkeeping in there too, and this test is about the number and the name.
+    assert flow.state["name"] == "佐藤"
+    assert flow.state["phone_number"] == "08012345678"
 
 
 # --- a number read out in pieces --------------------------------------------
