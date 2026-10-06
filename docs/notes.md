@@ -154,6 +154,18 @@
 - ContextStrategy.RESET は LLMMessagesUpdateFrame でコンテキストを丸ごと置き換える。
   会話履歴も消えるため、通話記録（終了時に context から保存）が前半を失う。使わない
 
+## 無音の検出
+
+- `user_idle_timeout` は1つしかないので、用途ごとに値を持てない。会話中は
+  復唱待ちの 8 秒で回しておき、`on_user_turn_idle` の中で
+  `flow_manager.current_node` を見て、声をかける場面かどうかを判定する。
+  終話後だけ `UserIdleTimeoutUpdateFrame` で 3 秒に差し替える
+- タイマーはボットが喋り終えてから数え始めるので、読み上げの長さは待ち時間に
+  入らない
+- 無音はテキストモードの eval では作れない。発話が注入されるだけで前後に音が
+  なく、ボットのアイドル判定（VAD と自分の発話で動く）が働かない。audio
+  モードで、最後のターンのあと何も送らずに待つ
+
 ## 通話が終わったときの後始末
 
 - `on_pipeline_finished` は終わり方によらず1回だけ走る。発信者が切った場合
