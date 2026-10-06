@@ -8,8 +8,10 @@ import pytest
 from callback_store import (
     expected_digit_count,
     has_expected_digit_count,
+    merge_name,
     merge_phone_number,
     normalize_phone_number,
+    phone_digits,
     read_callback_requests,
     save_callback_request,
 )
@@ -152,3 +154,46 @@ def test_the_count_is_of_digits_not_characters():
 )
 def test_merge_phone_number(collected, heard, expected):
     assert merge_phone_number(collected, heard) == expected
+
+
+@pytest.mark.parametrize(
+    ("collected", "heard", "expected"),
+    [
+        # Nothing yet: whatever arrives is the name.
+        ("", "小林", "小林"),
+        # The surname first, then the given name — the call test's order.
+        ("小林", "本木", "小林本木"),
+        # The whole name again, after the surname.
+        ("小林", "小林本木", "小林本木"),
+        # Only the given name was passed, after the whole name was collected.
+        ("小林本木", "本木", "小林本木"),
+        # The given name first and the surname second: a name grows at the
+        # front as well as the back, which is where digits and names differ.
+        ("本木", "小林本木", "小林本木"),
+        # The same piece twice.
+        ("小林", "小林", "小林"),
+        # Nothing new at all.
+        ("小林本木", "", "小林本木"),
+        # Spaces around a piece are not part of the name.
+        ("小林", " 本木 ", "小林本木"),
+    ],
+)
+def test_merge_name(collected, heard, expected):
+    assert merge_name(collected, heard) == expected
+
+
+@pytest.mark.parametrize(
+    ("phone_number", "expected"),
+    [
+        ("08012345678", "08012345678"),
+        ("080-1234-5678", "08012345678"),
+        # What Deepgram returns with numerals=True: "ゼロ" stays a word, so the
+        # leading zeros are lost. It is why the raw transcript is never the
+        # thing we count digits on — the model gives us the number instead.
+        ("ゼロ8ゼロの1234", "81234"),
+        ("", ""),
+    ],
+)
+def test_phone_digits(phone_number, expected):
+    """Only digits survive; anything a caller says between them does not."""
+    assert phone_digits(phone_number) == expected

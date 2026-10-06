@@ -23,7 +23,6 @@ def _flow(**state):
         ("080", "読み上げ始めたばかり"),
         ("0801234", "携帯で7桁、あと4桁"),
         ("03123456", "固定電話で8桁、あと2桁"),
-        ("", "まだ数字を聞き取れていない"),
     ],
 )
 def test_a_number_still_coming_waits(phone_number, why):

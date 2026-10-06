@@ -41,6 +41,22 @@ def normalize_phone_number(phone_number: str) -> str:
     return re.sub(r"[\s\-‐-―ー−()（）]", "", phone_number.strip())
 
 
+def phone_digits(phone_number: str) -> str:
+    """Return just the digits of *phone_number*.
+
+    What "the same number" means has to be decided somewhere, and it is not
+    string equality: the model hands over "080-1234-5678" and "08012345678" for
+    the same number on different turns.
+
+    Args:
+        phone_number: The number in any form.
+
+    Returns:
+        The digits, in order, with everything else removed.
+    """
+    return re.sub(r"\D", "", phone_number)
+
+
 # Mobile numbers are 11 digits and start 070, 080 or 090; everything else a
 # caller is likely to give — landline, IP, freephone — is 10.
 _MOBILE_PREFIXES = ("070", "080", "090")
@@ -57,7 +73,7 @@ def expected_digit_count(phone_number: str) -> int:
     Returns:
         11 for a mobile prefix, 10 otherwise.
     """
-    digits = re.sub(r"\D", "", phone_number)
+    digits = phone_digits(phone_number)
     return _MOBILE_DIGITS if digits.startswith(_MOBILE_PREFIXES) else _OTHER_DIGITS
 
 
@@ -74,7 +90,7 @@ def has_expected_digit_count(phone_number: str) -> bool:
     Returns:
         True when the digit count matches :func:`expected_digit_count`.
     """
-    digits = re.sub(r"\D", "", phone_number)
+    digits = phone_digits(phone_number)
     return len(digits) == expected_digit_count(phone_number)
 
 
@@ -97,7 +113,7 @@ def is_partial_phone_number(phone_number: str) -> bool:
     Returns:
         True when more digits are expected than a slip would account for.
     """
-    digits = re.sub(r"\D", "", phone_number)
+    digits = phone_digits(phone_number)
     return len(digits) <= expected_digit_count(phone_number) - _FRAGMENT_MARGIN
 
 
@@ -117,8 +133,8 @@ def merge_phone_number(collected: str, heard: str) -> str:
     Returns:
         The number as it stands after this piece.
     """
-    collected = re.sub(r"\D", "", collected)
-    heard = re.sub(r"\D", "", heard)
+    collected = phone_digits(collected)
+    heard = phone_digits(heard)
 
     if not collected:
         return heard
@@ -127,6 +143,42 @@ def merge_phone_number(collected: str, heard: str) -> str:
         return heard
     # Nothing new in it; keep what we have rather than going backwards.
     if collected.startswith(heard):
+        return collected
+    return collected + heard
+
+
+def merge_name(collected: str, heard: str) -> str:
+    """Combine the name collected so far with the next thing heard.
+
+    A caller gives their name the way they say it out loud — "小林" and then
+    "本木です" — and each piece arrives as its own turn. The model then hands
+    over sometimes the new piece and sometimes the whole name, exactly as it
+    does with a phone number, and in one call test it passed only the second
+    piece: the surname was lost and the read-back was wrong. Joining the pieces
+    here makes either choice mean the same thing.
+
+    Unlike digits, a name can be extended at the front (surname heard last), so
+    a piece that contains what we already have — at either end — replaces it.
+
+    Args:
+        collected: The name as it stands for this attempt.
+        heard: What the model just passed in.
+
+    Returns:
+        The name after this piece.
+    """
+    collected = collected.strip()
+    heard = heard.strip()
+
+    if not collected:
+        return heard
+    if not heard:
+        return collected
+    # The whole name, not just the new piece.
+    if heard.startswith(collected) or heard.endswith(collected):
+        return heard
+    # Nothing new in it; keep what we have rather than going backwards.
+    if collected.startswith(heard) or collected.endswith(heard):
         return collected
     return collected + heard
 

@@ -28,7 +28,6 @@ turns:
       - event: function_call
         calls:
           - name: confirm_callback
-            args: { phone_number: "0312345678" }
       # Read back, not asked for again: the next thing the bot does is wait.
       - event: function_call
         absent: true

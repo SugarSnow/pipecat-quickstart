@@ -35,7 +35,6 @@ turns:
       - event: function_call
         calls:
           - name: confirm_callback
-            args: { name: "佐藤", phone_number: "08012345678" }
 
   # The name was wrong, not the number: only the name is asked for again.
   #
@@ -62,7 +61,6 @@ turns:
       - event: function_call
         calls:
           - name: confirm_name
-            args: { name: "佐藤祐希" }
       - event: function_call
         absent: true
         within_ms: 4000

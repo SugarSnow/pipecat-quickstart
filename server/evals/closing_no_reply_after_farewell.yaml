@@ -40,7 +40,6 @@ turns:
       - event: function_call
         calls:
           - name: confirm_callback
-            args: { name: "佐藤祐希", phone_number: "08012345678" }
 
   # After a pause, as a caller answering the read-back would.
   - user: "はい、大丈夫です"

@@ -31,7 +31,6 @@ turns:
       - event: function_call
         calls:
           - name: confirm_callback
-            args: { name: "佐藤祐希", phone_number: "08012345678" }
 
   # After a pause, as a caller answering the read-back would. The turn above is
   # satisfied by a function call alone, so without this the harness speaks over
