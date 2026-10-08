@@ -57,18 +57,47 @@ TEXT_INSTRUCTIONS = (
     "カタカナとそのスペース以外は、説明も句読点も何も書かないでください。"
 )
 
+# Asked cold, straight off the caller's audio, the katakana came back 2/5. But
+# the model's own read-back is pronounced correctly 5/5 — so this asks it after
+# it has spoken, with its own unambiguous audio in the session. The question is
+# whether writing down what it just said is easier than writing down what it
+# just heard.
+WRITE_BACK_PROMPT = (
+    "いま復唱したお名前の読みを、カタカナだけで書いてください。"
+    "姓と名の間に半角スペースを1つ入れてください。"
+    "カタカナとそのスペース以外は、説明も句読点も何も書かないでください。"
+)
 
-async def ask_realtime(
-    model: str, pcm24: bytes, *, want_audio: bool
-) -> tuple[str, bytes, float]:
-    """Send one clip to a fresh session and return ``(text, audio, seconds)``.
 
-    A session per clip, so nothing the model said about the previous name is in
-    context when it hears the next one.
-    """
-    started = time.monotonic()
+async def collect(ws) -> tuple[str, bytes]:
+    """Read one response off the socket: its text and its audio."""
     text_parts: list[str] = []
     audio = bytearray()
+    async for message in ws:
+        event = json.loads(message)
+        kind = event.get("type", "")
+        if kind in ("response.output_text.delta", "response.output_audio_transcript.delta"):
+            text_parts.append(event.get("delta", ""))
+        elif kind == "response.output_audio.delta":
+            audio.extend(base64.b64decode(event["delta"]))
+        elif kind == "error":
+            text_parts.append(f"<error: {event.get('error', {}).get('message', '')}>")
+            break
+        elif kind == "response.done":
+            break
+    return "".join(text_parts).strip(), bytes(audio)
+
+
+async def ask_realtime(
+    model: str, pcm24: bytes, *, want_audio: bool, write_back: bool = False
+) -> tuple[str, bytes, float, str]:
+    """Send one clip to a fresh session and return ``(text, audio, seconds, written)``.
+
+    A session per clip, so nothing the model said about the previous name is in
+    context when it hears the next one. With *write_back*, a second turn asks it
+    to write down the reading it just spoke.
+    """
+    started = time.monotonic()
 
     async with websocket_connect(
         uri=f"{BASE_URL}?model={model}",
@@ -110,21 +139,33 @@ async def ask_realtime(
         )
         await ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
         await ws.send(json.dumps({"type": "response.create"}))
+        text, audio = await collect(ws)
 
-        async for message in ws:
-            event = json.loads(message)
-            kind = event.get("type", "")
-            if kind in ("response.output_text.delta", "response.output_audio_transcript.delta"):
-                text_parts.append(event.get("delta", ""))
-            elif kind == "response.output_audio.delta":
-                audio.extend(base64.b64decode(event["delta"]))
-            elif kind == "error":
-                text_parts.append(f"<error: {event.get('error', {}).get('message', '')}>")
-                break
-            elif kind == "response.done":
-                break
+        written = ""
+        if write_back:
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "conversation.item.create",
+                        "item": {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": WRITE_BACK_PROMPT}],
+                        },
+                    }
+                )
+            )
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "response.create",
+                        "response": {"output_modalities": ["text"]},
+                    }
+                )
+            )
+            written, _ = await collect(ws)
 
-    return "".join(text_parts).strip(), bytes(audio), time.monotonic() - started
+    return text, audio, time.monotonic() - started, written
 
 
 async def main() -> int:
@@ -135,6 +176,11 @@ async def main() -> int:
         "--text",
         action="store_true",
         help="ask for the reading as katakana text and score it, instead of a spoken read-back",
+    )
+    parser.add_argument(
+        "--write-back",
+        action="store_true",
+        help="after the spoken read-back, ask it to write that reading as katakana",
     )
     parser.add_argument("--out-dir", default="eval-runs/realtime-names", help="where WAVs go")
     args = parser.parse_args()
@@ -152,8 +198,11 @@ async def main() -> int:
             pcm8, rate = await speech.generate(spoken)
             pcm24 = await resampler.resample(pcm8, rate, API_SAMPLE_RATE)
             for run in range(args.runs):
-                text, audio, elapsed = await ask_realtime(
-                    args.model, pcm24, want_audio=not args.text
+                text, audio, elapsed, written = await ask_realtime(
+                    args.model,
+                    pcm24,
+                    want_audio=not args.text,
+                    write_back=args.write_back and not args.text,
                 )
                 path = ""
                 if audio:
@@ -161,19 +210,27 @@ async def main() -> int:
                     name = f"{expected.replace(' ', '')}_{run + 1}.wav"
                     (out_dir / name).write_bytes(to_wav(audio, API_SAMPLE_RATE))
                     path = str(out_dir / name)
-                rows.append((expected, text, elapsed, path))
+                rows.append((expected, text, elapsed, path, written))
 
     width = max(len(r[0]) for r in rows) + 2
-    mode = "カタカナの返答（採点あり）" if args.text else "復唱（音声を保存）"
-    print(f"\nmodel: {args.model}   {mode}   入力: 8kHz → {API_SAMPLE_RATE}Hz\n")
-    hits = 0
-    for expected, text, elapsed, path in rows:
-        ok = normalized(text) == normalized(expected) if args.text else None
-        hits += bool(ok)
-        mark = ("○" if ok else "×") if args.text else " "
-        print(f"{expected.ljust(width)}{text[:46].ljust(48)}{mark:3}{elapsed:6.2f}s  {path}")
-    print()
     if args.text:
+        mode = "聞いてすぐカタカナ（採点あり）"
+    elif args.write_back:
+        mode = "復唱 → 自分の発話をカタカナで書く（採点あり）"
+    else:
+        mode = "復唱（音声を保存）"
+    print(f"\nmodel: {args.model}   {mode}   入力: 8kHz → {API_SAMPLE_RATE}Hz\n")
+    scored = args.text or args.write_back
+    hits = 0
+    for expected, text, elapsed, path, written in rows:
+        answer = written if args.write_back and not args.text else text
+        ok = normalized(answer) == normalized(expected) if scored else None
+        hits += bool(ok)
+        mark = ("○" if ok else "×") if scored else " "
+        shown = f"{text[:22]} ｜ {written[:20]}" if args.write_back else text[:46]
+        print(f"{expected.ljust(width)}{shown.ljust(48)}{mark:3}{elapsed:6.2f}s  {path}")
+    print()
+    if scored:
         print(f"一致 {hits}/{len(rows)}", end="   ")
     print(f"応答の平均 {sum(r[2] for r in rows) / len(rows):.2f}s\n")
     if not args.text:
