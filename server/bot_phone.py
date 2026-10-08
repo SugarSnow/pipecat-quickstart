@@ -906,6 +906,14 @@ async def confirm_name(flow_manager: FlowManager, name: str) -> ConsolidatedFunc
     Args:
         name: 聞き直したお名前。
     """
+    # A re-stated name replaces what is held rather than being joined onto it.
+    # Joining is for a name arriving in pieces while it is first being
+    # collected; by the time it is being re-asked the caller is saying the whole
+    # name again. Merging here turned three mis-hearings in a row into
+    # 「林本木小林元木小早市本木」 on a real call — and the bot read every word
+    # of it back. The model also re-asks without calling correct_name, so the
+    # clearing cannot be left to that function alone.
+    flow_manager.state["name"] = ""
     return None, _confirm(flow_manager, name=name)
 
 

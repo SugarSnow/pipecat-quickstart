@@ -19,6 +19,7 @@ import pytest
 import bot_phone
 from bot_phone import (
     _confirm,
+    confirm_name,
     callback_collect_node,
     correct_name,
     correct_phone_number,
@@ -275,4 +276,41 @@ def test_fixing_the_name_after_the_number_was_cleared_asks_for_the_number():
     node = _confirm(flow, name="小林本木")
 
     assert node["name"] == "number_retry"
+    assert flow.state["name"] == "小林本木"
+
+
+# --- a name said again, rather than a name said in pieces --------------------
+
+
+def test_a_re_stated_name_replaces_the_one_held():
+    """Pieces are joined while collecting; a correction is the whole name."""
+    flow = _flow(name="林本木", phone_number="08012345678")
+
+    asyncio.run(confirm_name(flow, "小林元木"))
+
+    assert flow.state["name"] == "小林元木"
+
+
+def test_mis_hearings_do_not_pile_up():
+    """The call test: three goes at one name, read back as all three joined.
+
+    「林本木小林元木小早市本木様、お電話番号は…」 — and the caller hung up.
+    The model re-asks for the name without calling correct_name, so each new
+    attempt arrived with the previous one still held.
+    """
+    flow = _flow(name="小林本木", phone_number="07011111212")
+
+    for heard in ["林本木", "小林元木", "小早市本木"]:
+        asyncio.run(confirm_name(flow, heard))
+
+    assert flow.state["name"] == "小早市本木"
+
+
+def test_pieces_are_still_joined_while_collecting():
+    """The replacement is confined to the correction: submit_name still joins."""
+    flow = _flow()
+
+    asyncio.run(submit_name(flow, "小林"))
+    asyncio.run(submit_name(flow, "本木"))
+
     assert flow.state["name"] == "小林本木"
