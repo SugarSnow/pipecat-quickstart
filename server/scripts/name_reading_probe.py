@@ -64,6 +64,15 @@ DEFAULT_MODEL = "gpt-audio-1.5"
 # returns is the ceiling — no instruction can recover a name the audio lost.
 CONTROL_MODEL = "gpt-transcribe"
 
+# Transcription takes a `prompt` that biases the output. Written in hiragana, it
+# is a known way to pull the orthography away from kanji — which is the whole
+# problem here, since kanji is where the reading is lost.
+#
+# The names in it are deliberately not the ones under test: putting the answers
+# in the prompt would steer the content, not just the spelling, and the result
+# would mean nothing.
+KANA_PROMPT = "おなまえのよみです。やまだ たろう。すずき はなこ。たなか いちろう。"
+
 
 def to_wav(pcm: bytes, sample_rate: int) -> bytes:
     """Wrap raw 16-bit mono PCM in a WAV container."""
@@ -110,11 +119,14 @@ async def ask(client: AsyncOpenAI, model: str, wav: bytes) -> tuple[str, float]:
     return (response.choices[0].message.content or "").strip(), elapsed
 
 
-async def transcribe(client: AsyncOpenAI, model: str, wav: bytes) -> str:
-    """Transcribe one clip with no instruction beyond the language."""
+async def transcribe(
+    client: AsyncOpenAI, model: str, wav: bytes, prompt: str | None = None
+) -> str:
+    """Transcribe one clip, optionally biasing the spelling with *prompt*."""
+    extra = {"prompt": prompt} if prompt else {}
     try:
         result = await client.audio.transcriptions.create(
-            model=model, language="ja", file=("name.wav", wav, "audio/wav")
+            model=model, language="ja", file=("name.wav", wav, "audio/wav"), **extra
         )
     except Exception as e:
         return f"<{type(e).__name__}>"
@@ -122,8 +134,17 @@ async def transcribe(client: AsyncOpenAI, model: str, wav: bytes) -> str:
 
 
 def normalized(text: str) -> str:
-    """Compare on the katakana alone: spacing is not what is being measured."""
-    return "".join(text.split())
+    """Fold to one kana script and drop spacing before comparing.
+
+    What is being measured is whether the reading came back, so an answer in
+    hiragana counts: 「おおの りょうすけ」 is the right reading, and turning it
+    into katakana is a formatting job, not a listening one. Spacing is likewise
+    not the point.
+    """
+    folded = "".join(
+        chr(ord(c) + 0x60) if "\u3041" <= c <= "\u3096" else c for c in text
+    )
+    return "".join(folded.split())
 
 
 async def main() -> int:
@@ -158,25 +179,28 @@ async def main() -> int:
                 pcm = b"\x00\x00" * (sample_rate * args.lead_silence_ms // 1000) + pcm
             wav = to_wav(pcm, sample_rate)
             seconds = len(pcm) / 2 / sample_rate
-            control = await transcribe(client, CONTROL_MODEL, wav) if args.control else ""
+            control = kana = ""
+            if args.control:
+                control = await transcribe(client, CONTROL_MODEL, wav)
+                kana = await transcribe(client, CONTROL_MODEL, wav, KANA_PROMPT)
             for _ in range(args.runs):
                 answer, elapsed = await ask(client, args.model, wav)
-                rows.append((spoken, expected, answer, elapsed, seconds, control))
+                rows.append((spoken, expected, answer, elapsed, seconds, control, kana))
 
     width = max(len(r[1]) for r in rows) + 2
     lead = f"   lead silence: {args.lead_silence_ms}ms" if args.lead_silence_ms else ""
     print(f"\nmodel: {args.model}   voice: cartesia {VOICE_CONFIG['voice']} @ 8 kHz{lead}\n")
     head = f"{'正解'.ljust(width)}{'返答'.ljust(width)}{'':3}{'応答':>7}  {'音声長':>7}"
-    print(head + ("  文字起こし（指示なし）" if args.control else ""))
+    print(head + ("  文字起こし｜かなの prompt 付き" if args.control else ""))
     print("-" * (width * 2 + 22))
     hits = 0
-    for spoken, expected, answer, elapsed, seconds, control in rows:
+    for spoken, expected, answer, elapsed, seconds, control, kana in rows:
         ok = normalized(answer) == normalized(expected)
         hits += ok
         print(
             f"{expected.ljust(width)}{answer.ljust(width)}"
             f"{'○' if ok else '×':3}{elapsed:6.2f}s  {seconds:6.2f}s"
-            + (f"  {control}" if control else "")
+            + (f"  {control} ｜ {kana}" if control else "")
         )
     print("-" * (width * 2 + 22))
     average = sum(r[3] for r in rows) / len(rows)
