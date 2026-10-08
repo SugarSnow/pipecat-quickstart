@@ -10,6 +10,7 @@ from callback_store import (
     has_expected_digit_count,
     merge_phone_number,
     normalize_phone_number,
+    phone_digits,
     read_callback_requests,
     save_callback_request,
 )
@@ -152,3 +153,93 @@ def test_the_count_is_of_digits_not_characters():
 )
 def test_merge_phone_number(collected, heard, expected):
     assert merge_phone_number(collected, heard) == expected
+
+
+@pytest.mark.parametrize(
+    ("phone_number", "expected"),
+    [
+        ("08012345678", 11),  # 携帯
+        ("07012345678", 11),
+        ("09012345678", 11),
+        ("0312345678", 10),  # 固定電話
+        ("0612345678", 10),
+        ("0501234567", 10),  # IP電話
+        ("0120123456", 10),  # フリーダイヤル
+    ],
+)
+def test_how_many_digits_a_prefix_calls_for(phone_number, expected):
+    assert expected_digit_count(phone_number) == expected
+
+
+@pytest.mark.parametrize(
+    "phone_number",
+    ["08012345678", "09012345678", "0312345678", "0120123456", "080-1234-5678"],
+)
+def test_a_complete_number_passes(phone_number):
+    assert has_expected_digit_count(phone_number)
+
+
+@pytest.mark.parametrize(
+    ("phone_number", "why"),
+    [
+        ("0801234567", "携帯なのに10桁"),
+        ("080123456789", "携帯なのに12桁"),
+        ("031234567", "固定電話なのに9桁"),
+        ("03123456789", "固定電話なのに11桁"),
+        ("", "何も聞き取れていない"),
+    ],
+)
+def test_a_number_that_cannot_be_right_is_rejected(phone_number, why):
+    assert not has_expected_digit_count(phone_number), why
+
+
+def test_the_count_is_of_digits_not_characters():
+    """The caller's grouping is theirs; only the digits decide."""
+    assert has_expected_digit_count("080 1234 5678")
+    assert has_expected_digit_count("（03）1234-5678")
+
+
+# --- assembling a number read out in pieces ---------------------------------
+#
+# The model passes sometimes the new piece and sometimes everything so far; the
+# caller said the same thing either way, so both have to land the same.
+
+
+@pytest.mark.parametrize(
+    ("collected", "heard", "expected"),
+    [
+        # Nothing yet: whatever arrives is the number so far.
+        ("", "080", "080"),
+        # The new piece only.
+        ("080", "1234", "0801234"),
+        ("0801234", "5678", "08012345678"),
+        # Everything so far, repeated.
+        ("080", "0801234", "0801234"),
+        ("0801234", "08012345678", "08012345678"),
+        # The same piece twice — a stutter, not more digits.
+        ("080", "080", "080"),
+        # Nothing new at all.
+        ("08012345678", "", "08012345678"),
+        # Non-digits are dropped on the way in, as everywhere else.
+        ("080", "1234の", "0801234"),
+    ],
+)
+def test_merge_phone_number(collected, heard, expected):
+    assert merge_phone_number(collected, heard) == expected
+
+
+@pytest.mark.parametrize(
+    ("phone_number", "expected"),
+    [
+        ("08012345678", "08012345678"),
+        ("080-1234-5678", "08012345678"),
+        # What Deepgram returns with numerals=True: "ゼロ" stays a word, so the
+        # leading zeros are lost. It is why the raw transcript is never the
+        # thing we count digits on — the model gives us the number instead.
+        ("ゼロ8ゼロの1234", "81234"),
+        ("", ""),
+    ],
+)
+def test_phone_digits(phone_number, expected):
+    """Only digits survive; anything a caller says between them does not."""
+    assert phone_digits(phone_number) == expected

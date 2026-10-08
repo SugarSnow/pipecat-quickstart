@@ -1,0 +1,73 @@
+# Being re-asked for the number is when people remember the name was wrong too.
+#
+# From a call test: the caller rejected the read-back, the bot started re-taking
+# the number, and the caller said "名前も違いますね". The node the bot was in had
+# no function for a name, so the model called the one it had — with the number
+# that had just been turned down — and read the same wrong number back again.
+#
+# Only the function chain is asserted. The read-back and the re-ask are tts_say
+# lines, invisible to a text-mode run, and their wording is pinned in
+# tests/test_read_back.py; which value ends up stored is pinned in
+# tests/test_correction_routing.py.
+name: correction_switches_detail
+
+judge: !include judge_text.yaml
+
+turns:
+  - user: "折り返しの連絡をお願いしたいんですけど"
+    expect:
+      - event: response
+        eval: "お名前を尋ねている"
+
+  - user: "佐藤祐希と申します"
+    expect:
+      - event: response
+        eval: "お電話番号を尋ねている"
+
+  # No args asserted: whether the model hands over the whole number or the last
+  # piece it heard varies run to run, and both are merged to the same thing.
+  - user: "ゼロ八ゼロの一二三四の五六七八です"
+    expect:
+      - event: function_call
+        calls:
+          - name: confirm_callback
+
+  - user: "すみません、電話番号が違います"
+    send_after:
+      delay_ms: 3000
+    expect:
+      - event: function_call
+        calls:
+          - name: correct_phone_number
+
+  # The turn this scenario exists for. The waits before this one and the two
+  # after it are 5 seconds, not the usual 3: each follows a turn satisfied by a
+  # function call alone, and the bot still has a re-ask to compose. A turn sent
+  # into the middle of that cancels the response, and the LLM has then come
+  # back with no text and no function call at all (eval run 2026-10-06 11:32,
+  # 1/3) — a failure that looks like the bot ignoring the caller.
+  - user: "名前も違っていました"
+    send_after:
+      delay_ms: 5000
+    expect:
+      - event: function_call
+        calls:
+          - name: correct_name
+
+  - user: "小林本木です"
+    send_after:
+      delay_ms: 5000
+    expect:
+      - event: function_call
+        calls:
+          - name: confirm_name
+
+  # The number was cleared when it was rejected, so it is asked for again
+  # rather than read back — and this is the turn that gives it.
+  - user: "ゼロ八ゼロの一二三四の五六七八です"
+    send_after:
+      delay_ms: 5000
+    expect:
+      - event: function_call
+        calls:
+          - name: confirm_phone_number

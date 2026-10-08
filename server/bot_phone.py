@@ -80,6 +80,7 @@ from callback_store import (
     has_expected_digit_count,
     is_partial_phone_number,
     merge_phone_number,
+    phone_digits,
     save_callback_request,
 )
 from silent_tts import SilentTTSService
@@ -536,6 +537,7 @@ CALLBACK_TASK = """\
 【折り返しのご依頼を受け付ける】
 まずお名前を聞いてください。お名前を聞けたら、次に電話番号を聞いてください。必ず1つずつ順番に聞き、一度に両方を聞かないでください。
 お名前は名字だけでもかまいません。下のお名前を尋ね直さないでください。
+お名前を聞き取れたら submit_name に渡してください。「小林」「本木です」のように分かれて聞こえたときは、**ここまでに聞き取れたお名前の全体**を渡してください。断片だけを渡すと、前に渡した分は残りません。
 
 【電話番号の聞き取り】
 相手がまだ言い終えていない様子のとき（「ゼロハチゼロの」のように文が途中で切れているとき）は、「はい」とだけ返して続きを待ってください。
@@ -554,18 +556,52 @@ CONFIRM_TASK = """\
 お名前と電話番号の復唱はすでに読み上げられています。あなたから復唱し直さないでください。
 相手が「はい」「大丈夫です」などと肯定したら、record_callback を呼んでください。
 お名前が違うと言われたら correct_name を、電話番号が違うと言われたら correct_phone_number を呼んでください。どちらが違うのか分からないときは correct_phone_number を呼んでください。
+「違います」「間違っています」のように否定されたら、必ずこのどちらかを呼んでください。相手が同じ返答の中で正しい値まで言っていても同じです（「違います、名前は小林本木です」なら correct_name を呼びます）。自分で聞き直しの言葉を書いたり、新しい値を復唱したりしてはいけません。
 肯定も訂正もない返答（聞き返しなど）のときは、どちらの関数も呼ばず、ひとこと短く答えてください。
 関数を呼ばずに、終話の挨拶やお礼、折り返しの約束を言ってはいけません。肯定されたのに record_callback を呼ばないまま会話を終えるのは誤りです。
 """
 
-CORRECTION_TASK = """\
-【聞き直し】
-違うと言われた方だけを、ひとことで聞き直してください。もう片方はすでに聞けているので尋ねないでください。
-電話番号を聞き直しているときも、最初に伺うときと同じです。相手がまだ言い終えていない様子のとき（「ゼロハチゼロ」「六一一の」のように文が途中で切れているとき）は、「はい」とだけ返して続きを待ってください。「その後の番号をお願いします」のように言葉を足さないでください。相手の続きとかぶります。
-聞き直した方を聞き取れたら、お名前なら confirm_name に、電話番号なら confirm_phone_number に、その1つだけを渡してください。
-渡すのは、いま聞き直して新しく聞き取れた方です。前に聞いていた古い値を渡してはいけません。相手が「佐藤祐希です」と言い直したなら、渡すのは「佐藤祐希」です。
-電話番号は数字だけにしてください。復唱はこちらで読み上げるので、あなたは復唱しないでください。
+# One procedure per detail being re-asked, rather than one shared by both. The
+# shared version named confirm_name and confirm_phone_number in the same
+# sentence, so whichever node it was in was telling the model about a function
+# it did not carry — and the model took the invitation: asked to re-take a name,
+# it called the number's function with the number that had just been rejected.
+def correction_task(*, detail: str, switchable: bool = True) -> str:
+    """Return the 聞き直し procedure for one detail.
+
+    Args:
+        detail: Which detail is being re-asked, ``"name"`` or ``"phone_number"``.
+        switchable: Whether the node also carries the other detail's correction
+            function. False where there is nothing to hand over to — a caller
+            mid-number is not about to correct their name.
+
+    Returns:
+        The procedure, as a role_message fragment.
+    """
+    if detail == "name":
+        asking = """お名前だけを、ひとことで聞き直してください。電話番号はすでに聞けているので尋ねないでください。
+お名前を聞き取れたら confirm_name に渡してください。
 """
+        again = "相手が「佐藤祐希です」と言い直したなら、渡すのは「佐藤祐希」です。"
+        switch = "電話番号も違うと言われたら、correct_phone_number を呼んでください。\n"
+    else:
+        asking = """お電話番号だけを、ひとことで聞き直してください。お名前はすでに聞けているので尋ねないでください。
+相手がまだ言い終えていない様子のとき（「ゼロハチゼロ」「六一一の」のように文が途中で切れているとき）は、「はい」とだけ返して続きを待ってください。「その後の番号をお願いします」のように言葉を足さないでください。相手の続きとかぶります。
+聞き取れた番号は confirm_phone_number に、数字だけにして渡してください。
+"""
+        again = "相手が「ゼロハチゼロの一二三四の五六七八です」と言い直したなら、渡すのは 08012345678 です。"
+        switch = "お名前も違うと言われたら、correct_name を呼んでください。\n"
+
+    return (
+        "【聞き直し】\n"
+        + asking
+        + "渡すのは、いま聞き直して新しく聞き取れた方です。前に聞いていた古い値を渡してはいけません。"
+        + again
+        + "\n"
+        + "復唱はこちらで読み上げるので、あなたは復唱しないでください。\n"
+        + (switch + "まだ聞き取れていない値を、自分で埋めて渡してはいけません。\n" if switchable else "")
+    )
+
 
 CLOSING_TASK = f"""\
 【終話】
@@ -618,14 +654,21 @@ def reception_offered_node() -> NodeConfig:
 
 
 def callback_collect_node() -> NodeConfig:
-    """折り返し受付: collect the name and the number, one at a time."""
+    """折り返し受付: collect the name and the number, one at a time.
+
+    The name is handed over through :func:`submit_name` as each piece is heard,
+    rather than only once at the end with the number. A caller says "小林" and
+    then "本木です", and the model passed on just the second piece — the surname
+    was lost and the read-back was wrong. Taking the pieces as they come means
+    the joining is done here.
+    """
     return {
         "name": "callback_collect",
         "role_message": ROLE_MESSAGE + CALLBACK_TASK,
         "task_messages": [
             {"role": "developer", "content": "折り返しのご依頼を受け付けてください。"}
         ],
-        "functions": [confirm_callback],
+        "functions": [submit_name, confirm_callback],
     }
 
 
@@ -651,22 +694,33 @@ def callback_confirm_node(name: str, phone_number: str) -> NodeConfig:
 
 
 def name_correction_node() -> NodeConfig:
-    """お名前だけを聞き直す。"""
+    """お名前だけを聞き直す。
+
+    ``correct_phone_number`` is here as well as ``confirm_name``: a caller who
+    is told the wrong name is often about to say the number is wrong too, and a
+    node that can only take a name leaves the model with nothing to call.
+    """
     return {
         "name": "name_correction",
-        "role_message": ROLE_MESSAGE + CORRECTION_TASK,
+        "role_message": ROLE_MESSAGE + correction_task(detail="name"),
         "task_messages": [{"role": "developer", "content": "お名前をもう一度伺ってください。"}],
-        "functions": [confirm_name],
+        "functions": [confirm_name, correct_phone_number],
     }
 
 
 def phone_correction_node() -> NodeConfig:
-    """電話番号だけを聞き直す。"""
+    """電話番号だけを聞き直す。
+
+    With ``correct_name`` alongside, for the reason the other way round: asked
+    for the number again, the caller said "名前も違いますね" — and the only
+    function this node had was the one for the number, so the model called it
+    with the number that had just been turned down.
+    """
     return {
         "name": "phone_correction",
-        "role_message": ROLE_MESSAGE + CORRECTION_TASK,
+        "role_message": ROLE_MESSAGE + correction_task(detail="phone_number"),
         "task_messages": [{"role": "developer", "content": "お電話番号をもう一度伺ってください。"}],
-        "functions": [confirm_phone_number],
+        "functions": [confirm_phone_number, correct_name],
     }
 
 
@@ -680,7 +734,8 @@ def number_fragment_node() -> NodeConfig:
     """
     return {
         "name": "number_fragment",
-        "role_message": ROLE_MESSAGE + CORRECTION_TASK,
+        "role_message": ROLE_MESSAGE
+        + correction_task(detail="phone_number", switchable=False),
         "task_messages": [{"role": "developer", "content": "番号の続きを待ってください。"}],
         "pre_actions": [{"type": "tts_say", "text": ACKNOWLEDGE_LINE}],
         "respond_immediately": False,
@@ -697,11 +752,11 @@ def number_retry_node() -> NodeConfig:
     """
     return {
         "name": "number_retry",
-        "role_message": ROLE_MESSAGE + CORRECTION_TASK,
+        "role_message": ROLE_MESSAGE + correction_task(detail="phone_number"),
         "task_messages": [{"role": "developer", "content": "お電話番号をもう一度伺ってください。"}],
         "pre_actions": [{"type": "tts_say", "text": RE_ASK_NUMBER_LINE}],
         "respond_immediately": False,
-        "functions": [confirm_phone_number],
+        "functions": [confirm_phone_number, correct_name],
     }
 
 
@@ -715,23 +770,76 @@ def closing_node() -> NodeConfig:
     }
 
 
-def _confirm(flow_manager: FlowManager, **details: str) -> NodeConfig:
+def _confirm(flow_manager: FlowManager, **details: str) -> NodeConfig | None:
     """Remember whichever detail was just heard and move to the read-back.
 
     Unless the number cannot be right: a mobile prefix needs 11 digits and
     everything else 10, and a number that does not add up is asked for again
-    instead of being read back.
+    instead of being read back. Nor can a detail the caller has already turned
+    down be read back again, whatever the model passes.
+
+    Returns:
+        The node to move to, or None to stay where the call already is.
     """
-    # A number read out in pieces is assembled here rather than left to the
-    # model, which passes sometimes the new piece and sometimes the whole number
-    # so far. Merging makes the two indistinguishable.
+    state = flow_manager.state
+
+    # Two ways the model passes a detail it has not heard, both of which have to
+    # go nowhere.
+    #
+    # Nothing new was heard means there is nothing to move on to — and staying
+    # put is also what keeps out of the way of a correction called in the same
+    # turn. Told both details were wrong, the model called correct_name and
+    # confirm_phone_number together; Flows holds one pending transition, so the
+    # second call decided where the call went. It landed in the number's
+    # re-ask, which carries no function for a name, and the name the caller
+    # gave next had nowhere to go.
+    #
+    # First way: an empty value, passed rather than leaving the function alone.
+    if any(not value.strip() for value in details.values()):
+        logger.info("Nothing new was heard; staying put")
+        return None
+
+    # Second way: the value the caller has just turned down, offered back. It
+    # cannot be the right one — asked to re-take a name, the model answered by
+    # passing the number rejected a moment earlier, and the bot read the same
+    # wrong number out a second time.
+    if "phone_number" in details and _is_rejected_number(state, details["phone_number"]):
+        logger.info("The number offered is the one just rejected; staying put")
+        return None
+    if "name" in details and _is_rejected_name(state, details["name"]):
+        logger.info("The name offered is the one just rejected; staying put")
+        return None
+
+    # A number given in pieces is assembled here rather than left to the model,
+    # which passes sometimes the new piece and sometimes the whole number so
+    # far. Merging makes the two indistinguishable, and the digit count puts a
+    # ceiling on how wrong it can go.
+    #
+    # A name is not joined, it is replaced. There is no digit count to stop it,
+    # and "小林" followed by "本木" is indistinguishable from "佐藤" followed by
+    # "間違えました、小林" — so joining turned a caller's own correction into
+    # 「佐藤小林様」 and then, over three more attempts to fix it,
+    # 「佐藤小林本木も汽様」. Each attempt made it worse and the caller hung up.
+    # Replacing can drop a surname the model passed in two pieces, but the
+    # read-back shows that at once and one more turn fixes it.
     if "phone_number" in details:
         details["phone_number"] = merge_phone_number(
-            flow_manager.state.get("phone_number", ""), details["phone_number"]
+            state.get("phone_number", ""), details["phone_number"]
         )
-    flow_manager.state.update(details)
-    name = flow_manager.state.get("name", "")
-    phone_number = flow_manager.state.get("phone_number", "")
+        state["rejected_phone_number"] = ""
+    if "name" in details:
+        details["name"] = details["name"].strip()
+        state["rejected_name"] = ""
+    state.update(details)
+    name = state.get("name", "")
+    phone_number = state.get("phone_number", "")
+
+    # Nothing to read back yet: the number was cleared by a correction and the
+    # name is what got fixed. Without this an empty number looks like one still
+    # being read out, and the bot would answer "はい" and wait for ever.
+    if not phone_number:
+        logger.info("No number to read back yet; asking for it")
+        return number_retry_node()
 
     if is_partial_phone_number(phone_number):
         logger.info(f"Phone number is still coming ({phone_number}); waiting for the rest")
@@ -741,14 +849,26 @@ def _confirm(flow_manager: FlowManager, **details: str) -> NodeConfig:
         logger.info(f"Phone number has the wrong digit count ({phone_number}); asking again")
         # Cleared so the next attempt is assembled from scratch: these digits
         # are known to be wrong, and merging onto them would carry the mistake.
-        flow_manager.state["phone_number"] = ""
+        state["phone_number"] = ""
         return number_retry_node()
 
     logger.info(f"Reading back: {name} / {phone_number}")
     # Each read-back gets its own nudge: a corrected number is read back again,
     # and the caller can just as easily miss their cue the second time.
-    flow_manager.state["readback_nudged"] = False
+    state["readback_nudged"] = False
     return callback_confirm_node(name, phone_number)
+
+
+def _is_rejected_number(state: dict, offered: str) -> bool:
+    """Whether *offered* is the number the caller has already turned down."""
+    rejected = state.get("rejected_phone_number", "")
+    return bool(rejected) and phone_digits(offered) == phone_digits(rejected)
+
+
+def _is_rejected_name(state: dict, offered: str) -> bool:
+    """Whether *offered* is the name the caller has already turned down."""
+    rejected = state.get("rejected_name", "")
+    return bool(rejected) and offered.strip() == rejected.strip()
 
 
 @flows_tool_options(cancel_on_interruption=True)
@@ -756,6 +876,29 @@ async def start_callback(flow_manager: FlowManager) -> ConsolidatedFunctionResul
     """折り返しのご依頼を受け付けます。相手が折り返しを希望したときに呼んでください。"""
     logger.info("Caller asked for a callback; collecting their details")
     return None, callback_collect_node()
+
+
+@flows_tool_options(cancel_on_interruption=True)
+async def submit_name(flow_manager: FlowManager, name: str) -> ConsolidatedFunctionResult:
+    """聞き取れたお名前を渡してください。名字だけ、聞き取れたぶんだけでもかまいません。
+
+    Args:
+        name: いま聞き取れたお名前。
+    """
+    if flow_manager.current_node == "callback_collect":
+        # Still collecting: no transition, and the name goes back as the result
+        # so the model can see what is held and ask only for what is missing.
+        flow_manager.state["name"] = name.strip()
+        logger.info(f"Name so far: {name.strip()}")
+        return {"name": name.strip()}, None
+
+    # Past the read-back. The model reaches for this function instead of
+    # correct_name — on one call it answered "名前が違ってて、小林本木です" by
+    # calling submit_name, so the correction never went through a correction
+    # node and the details were never read back again. Treat it as the
+    # correction it is.
+    logger.info(f"Name corrected after the read-back: {name.strip()}")
+    return None, _confirm(flow_manager, name=name)
 
 
 @flows_tool_options(cancel_on_interruption=True)
@@ -797,6 +940,10 @@ async def confirm_phone_number(
 async def correct_name(flow_manager: FlowManager) -> ConsolidatedFunctionResult:
     """お名前が違うと言われたときに呼んでください。お名前だけを聞き直します。"""
     logger.info("Caller says the name is wrong; asking for it again")
+    # The name just rejected must neither be merged into what comes next nor
+    # offered back as the correction.
+    flow_manager.state["rejected_name"] = flow_manager.state.get("name", "")
+    flow_manager.state["name"] = ""
     return None, name_correction_node()
 
 
@@ -804,7 +951,9 @@ async def correct_name(flow_manager: FlowManager) -> ConsolidatedFunctionResult:
 async def correct_phone_number(flow_manager: FlowManager) -> ConsolidatedFunctionResult:
     """電話番号が違うと言われたときに呼んでください。電話番号だけを聞き直します。"""
     logger.info("Caller says the number is wrong; asking for it again")
-    # The number just rejected must not be merged into what comes next.
+    # The number just rejected must neither be merged into what comes next nor
+    # offered back as the correction.
+    flow_manager.state["rejected_phone_number"] = flow_manager.state.get("phone_number", "")
     flow_manager.state["phone_number"] = ""
     return None, phone_correction_node()
 

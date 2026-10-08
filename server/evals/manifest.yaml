@@ -34,6 +34,7 @@ suite:
       - callback_requested_directly
       - callback_saved
       - closing_no_reply_after_farewell
+      - correction_switches_detail
       - in_scope_answers
       - in_scope_unknown_wording
       - out_of_scope_callback_offer

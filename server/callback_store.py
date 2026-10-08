@@ -41,6 +41,22 @@ def normalize_phone_number(phone_number: str) -> str:
     return re.sub(r"[\s\-‐-―ー−()（）]", "", phone_number.strip())
 
 
+def phone_digits(phone_number: str) -> str:
+    """Return just the digits of *phone_number*.
+
+    What "the same number" means has to be decided somewhere, and it is not
+    string equality: the model hands over "080-1234-5678" and "08012345678" for
+    the same number on different turns.
+
+    Args:
+        phone_number: The number in any form.
+
+    Returns:
+        The digits, in order, with everything else removed.
+    """
+    return re.sub(r"\D", "", phone_number)
+
+
 # Mobile numbers are 11 digits and start 070, 080 or 090; everything else a
 # caller is likely to give — landline, IP, freephone — is 10.
 _MOBILE_PREFIXES = ("070", "080", "090")
@@ -57,7 +73,7 @@ def expected_digit_count(phone_number: str) -> int:
     Returns:
         11 for a mobile prefix, 10 otherwise.
     """
-    digits = re.sub(r"\D", "", phone_number)
+    digits = phone_digits(phone_number)
     return _MOBILE_DIGITS if digits.startswith(_MOBILE_PREFIXES) else _OTHER_DIGITS
 
 
@@ -74,7 +90,7 @@ def has_expected_digit_count(phone_number: str) -> bool:
     Returns:
         True when the digit count matches :func:`expected_digit_count`.
     """
-    digits = re.sub(r"\D", "", phone_number)
+    digits = phone_digits(phone_number)
     return len(digits) == expected_digit_count(phone_number)
 
 
@@ -97,7 +113,7 @@ def is_partial_phone_number(phone_number: str) -> bool:
     Returns:
         True when more digits are expected than a slip would account for.
     """
-    digits = re.sub(r"\D", "", phone_number)
+    digits = phone_digits(phone_number)
     return len(digits) <= expected_digit_count(phone_number) - _FRAGMENT_MARGIN
 
 
@@ -117,8 +133,8 @@ def merge_phone_number(collected: str, heard: str) -> str:
     Returns:
         The number as it stands after this piece.
     """
-    collected = re.sub(r"\D", "", collected)
-    heard = re.sub(r"\D", "", heard)
+    collected = phone_digits(collected)
+    heard = phone_digits(heard)
 
     if not collected:
         return heard

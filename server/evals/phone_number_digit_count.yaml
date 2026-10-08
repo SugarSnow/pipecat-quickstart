@@ -25,7 +25,10 @@ turns:
         eval: "お電話番号を尋ねている"
 
   # 0801234567 — a mobile prefix with only 10 digits. The details still reach
-  # confirm_callback; what the code does with them is the point.
+  # confirm_callback; what the code does with them is the point. The digits
+  # themselves are not asserted — the model writes them as "0801234567" or
+  # "080-1234-567" from one run to the next — and they do not need to be: the
+  # absent check below is what shows the count was rejected.
   # "以上です" so that "finished speaking" is not a judgement call: the model
   # otherwise sometimes holds a short number back instead of passing it on.
   - user: "ゼロ八ゼロ、一二三四、五六七です。以上です"
@@ -33,7 +36,6 @@ turns:
       - event: function_call
         calls:
           - name: confirm_callback
-            args: { phone_number: "0801234567" }
       # Nothing is read back and nothing is recorded: the re-ask line is spoken
       # as a tts_say pre-action (invisible to a text-mode run) and the node waits.
       - event: function_call
