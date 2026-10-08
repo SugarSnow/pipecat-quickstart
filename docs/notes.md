@@ -142,6 +142,17 @@
   聞き返されたときに言い直せなくなった（eval 0/3）。文言は「聞き返された
   ときだけ言い直す」の一文にだけ残す。遷移先は `respond_immediately: False`
   （直前に喋り終えたばかりなので）
+- **`pre_actions` の `tts_say` が割り込まれると `_set_node` が完了しない。**
+  `_maybe_wait_for_ongoing_actions_to_finish`（`flows/actions.py`）が
+  `ActionFinishedFrame` の到達を待つが、割り込みでフレームが流されると
+  そのイベントは来ない。`_current_node` が更新されないだけでなく、
+  **そのノードの role_message と functions も適用されない**。前のノードの
+  指示と道具のまま会話が続くので、「モデルが関数を呼ばない」「別のノードの
+  関数を呼ぶ」「同じことを聞き直す」の形で表に出る。ログでは
+  「Setting node: X」のあとに「Successfully set node: X」が出ないことで分かる。
+  固定文言は遷移の外で流す（遷移したうえで `TTSSpeakFrame` を queue する）
+- 挨拶だけこれを踏んでいなかったのは、接続からの自前ミュートで読み上げが
+  守られていたから。`_set_node` は読み上げが終わる6秒後に完了していた
 - ノードを手で移すときは `flow_manager.current_node` で今いるノードを確かめる。
   文言の検出だけで移ると、復唱や終話など別のノードにいるときに
   instruction を差し替えてしまう
