@@ -10,7 +10,7 @@ checked here is the wording, the wait, and the bookkeeping that keeps it to one
 nudge per read-back.
 """
 
-from types import SimpleNamespace
+from conftest import make_flow, run
 
 from bot_phone import (
     CLOSING_SILENCE_SECS,
@@ -23,7 +23,7 @@ from bot_phone import (
 
 
 def _flow(**state):
-    return SimpleNamespace(state=dict(state))
+    return make_flow(**state)
 
 
 # --- the line ---------------------------------------------------------------
@@ -61,7 +61,7 @@ def test_the_closing_hangs_up_sooner_than_the_nudge_waits():
 def test_reaching_the_read_back_arms_a_nudge():
     flow = _flow(name="佐藤")
 
-    _confirm(flow, phone_number="08012345678")
+    run(_confirm(flow, phone_number="08012345678"))
 
     assert flow.state["readback_nudged"] is False
 
@@ -70,12 +70,12 @@ def test_a_second_read_back_arms_another():
     """A corrected number is read back again, and the caller can miss their cue
     the second time just as easily."""
     flow = _flow(name="佐藤")
-    _confirm(flow, phone_number="08012345678")
+    run(_confirm(flow, phone_number="08012345678"))
     flow.state["readback_nudged"] = True  # as the handler would leave it
 
     # 違うと言われ、聞き直して、もう一度復唱する
     flow.state["phone_number"] = ""
-    _confirm(flow, phone_number="09087654321")
+    run(_confirm(flow, phone_number="09087654321"))
 
     assert flow.state["readback_nudged"] is False
 
@@ -84,7 +84,7 @@ def test_a_number_still_coming_does_not_arm_one():
     """The bot is not waiting on an answer yet — it is waiting on more digits."""
     flow = _flow(name="佐藤")
 
-    node = _confirm(flow, phone_number="080")
+    node = run(_confirm(flow, phone_number="080"))
 
     assert node["name"] == "number_fragment"
     assert "readback_nudged" not in flow.state
@@ -93,7 +93,7 @@ def test_a_number_still_coming_does_not_arm_one():
 def test_a_number_sent_back_does_not_arm_one():
     flow = _flow(name="佐藤")
 
-    node = _confirm(flow, phone_number="0801234567")
+    node = run(_confirm(flow, phone_number="0801234567"))
 
     assert node["name"] == "number_retry"
     assert "readback_nudged" not in flow.state

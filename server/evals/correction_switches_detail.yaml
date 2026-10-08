@@ -5,7 +5,7 @@
 # no function for a name, so the model called the one it had — with the number
 # that had just been turned down — and read the same wrong number back again.
 #
-# Only the function chain is asserted. The read-back and the re-ask are tts_say
+# Only the function chain is asserted. The read-back and the re-ask are fixed
 # lines, invisible to a text-mode run, and their wording is pinned in
 # tests/test_read_back.py; which value ends up stored is pinned in
 # tests/test_correction_routing.py.

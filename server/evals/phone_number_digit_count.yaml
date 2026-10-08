@@ -9,8 +9,8 @@ name: phone_number_digit_count
 judge: !include judge_text.yaml
 
 turns:
-  # Nothing is asserted about the greeting here. It is a fixed line spoken as a
-  # tts_say pre-action, and a text-mode run cannot see it: the harness drops
+  # Nothing is asserted about the greeting here. It is a fixed line the bot
+  # speaks itself, and a text-mode run cannot see it: the harness drops
   # bot-tts-text unless the bot is really speaking. Its wording is pinned in
   # tests/test_greeting.py, and greeting_not_interrupted_audio covers it being
   # spoken in full over a caller who starts early.
@@ -36,8 +36,8 @@ turns:
       - event: function_call
         calls:
           - name: confirm_callback
-      # Nothing is read back and nothing is recorded: the re-ask line is spoken
-      # as a tts_say pre-action (invisible to a text-mode run) and the node waits.
+      # Nothing is read back and nothing is recorded: the re-ask line is one
+      # the bot speaks itself (invisible to a text-mode run) and the node waits.
       - event: function_call
         absent: true
         within_ms: 4000

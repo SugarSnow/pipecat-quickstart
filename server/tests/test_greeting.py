@@ -31,7 +31,9 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.tests.utils import run_test
 from pipecat.utils.time import time_now_iso8601
 
-from bot_phone import GREETING_LINE, OpeningUserMuteStrategy, reception_node
+from conftest import make_flow, run
+
+from bot_phone import GREETING_LINE, OpeningUserMuteStrategy, _say, reception_node
 
 
 def test_greeting_wording():
@@ -48,12 +50,25 @@ def test_greeting_is_speakable():
     assert not any(c in GREETING_LINE for c in "*-•#`[]()")
 
 
-def test_reception_node_speaks_the_greeting_and_waits():
+def test_reception_node_waits_instead_of_greeting_itself():
+    """The greeting is queued by the bot on connect, not by the transition.
+
+    A tts_say pre-action would be waited on inside _set_node, and a caller who
+    talks over it leaves the node unapplied — see bot_phone._say.
+    """
     node = reception_node()
 
-    assert node["pre_actions"] == [{"type": "tts_say", "text": GREETING_LINE}]
+    assert "pre_actions" not in node
     # Without this the LLM would answer on top of the line just queued.
     assert node["respond_immediately"] is False
+
+
+def test_a_line_is_queued_as_the_bot_speaking_it():
+    flow = make_flow()
+
+    run(_say(flow, GREETING_LINE))
+
+    assert flow.worker.spoken == [GREETING_LINE]
 
 
 def test_llm_is_not_asked_to_greet():

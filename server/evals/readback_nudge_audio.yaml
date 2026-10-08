@@ -6,7 +6,7 @@
 # Audio mode because this is about silence. A text-mode turn is an injected
 # message with no sound either side of it, so the bot's idle timer — which runs
 # off VAD and its own speech — never gets a quiet line to measure. The nudge is
-# also a tts_say, which a text-mode run cannot observe at all.
+# also a fixed line, which a text-mode run cannot observe at all.
 name: readback_nudge_audio
 
 user:

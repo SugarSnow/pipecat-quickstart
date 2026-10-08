@@ -11,8 +11,8 @@ name: callback_name_correction
 judge: !include judge_text.yaml
 
 turns:
-  # Nothing is asserted about the greeting here. It is a fixed line spoken as a
-  # tts_say pre-action, and a text-mode run cannot see it: the harness drops
+  # Nothing is asserted about the greeting here. It is a fixed line the bot
+  # speaks itself, and a text-mode run cannot see it: the harness drops
   # bot-tts-text unless the bot is really speaking. Its wording is pinned in
   # tests/test_greeting.py, and greeting_not_interrupted_audio covers it being
   # spoken in full over a caller who starts early.
@@ -27,7 +27,7 @@ turns:
         eval: "お電話番号を尋ねている"
 
   # Both details are in hand, so they go to confirm_callback and the bot reads
-  # them back itself. The read-back is a tts_say pre-action, which a text-mode
+  # them back itself. The read-back is a line the bot speaks itself, which a text-mode
   # run cannot see — its wording is pinned in tests/test_read_back.py instead.
   # What matters here is that nothing is recorded yet.
   - user: "ゼロ八ゼロ一二三四五六七八です"

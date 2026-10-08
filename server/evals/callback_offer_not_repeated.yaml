@@ -9,8 +9,8 @@ name: callback_offer_not_repeated
 judge: !include judge_text.yaml
 
 turns:
-  # Nothing is asserted about the greeting here. It is a fixed line spoken as a
-  # tts_say pre-action, and a text-mode run cannot see it: the harness drops
+  # Nothing is asserted about the greeting here. It is a fixed line the bot
+  # speaks itself, and a text-mode run cannot see it: the harness drops
   # bot-tts-text unless the bot is really speaking. Its wording is pinned in
   # tests/test_greeting.py, and greeting_not_interrupted_audio covers it being
   # spoken in full over a caller who starts early.

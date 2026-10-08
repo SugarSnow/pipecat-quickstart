@@ -5,16 +5,14 @@ complete number and, when told to wait, worded the wait itself and talked over
 the caller. Three outcomes, one per state the number can be in.
 """
 
-from types import SimpleNamespace
-
 import pytest
+from conftest import make_flow, run
 
 from bot_phone import _confirm
 
 
 def _flow(**state):
-    """A stand-in for the flow manager: _confirm only reads and writes state."""
-    return SimpleNamespace(state=dict(state))
+    return make_flow(**state)
 
 
 @pytest.mark.parametrize(
@@ -26,10 +24,12 @@ def _flow(**state):
     ],
 )
 def test_a_number_still_coming_waits(phone_number, why):
-    node = _confirm(_flow(name="佐藤"), phone_number=phone_number)
+    flow = _flow(name="佐藤")
+
+    node = run(_confirm(flow, phone_number=phone_number))
 
     assert node["name"] == "number_fragment", why
-    assert node["pre_actions"][0]["text"] == "はい。"
+    assert flow.worker.spoken == ["はい。"]
     assert node["respond_immediately"] is False
 
 
@@ -42,27 +42,31 @@ def test_a_number_still_coming_waits(phone_number, why):
     ],
 )
 def test_a_number_that_came_out_wrong_is_asked_for_again(phone_number, why):
-    node = _confirm(_flow(name="佐藤"), phone_number=phone_number)
+    flow = _flow(name="佐藤")
+
+    node = run(_confirm(flow, phone_number=phone_number))
 
     assert node["name"] == "number_retry", why
-    assert "もう一度最初から" in node["pre_actions"][0]["text"]
+    assert "もう一度最初から" in flow.worker.spoken[0]
     assert node["respond_immediately"] is False
 
 
 @pytest.mark.parametrize("phone_number", ["08012345678", "0312345678"])
 def test_a_complete_number_is_read_back(phone_number):
-    node = _confirm(_flow(name="佐藤祐希"), phone_number=phone_number)
+    flow = _flow(name="佐藤祐希")
+
+    node = run(_confirm(flow, phone_number=phone_number))
 
     assert node["name"] == "callback_confirm"
-    assert node["pre_actions"][0]["text"].startswith("佐藤祐希様、お電話番号は")
+    assert flow.worker.spoken[0].startswith("佐藤祐希様、お電話番号は")
 
 
 def test_what_was_heard_is_remembered_across_the_pieces():
     """Each piece replaces the number; the name heard earlier stays."""
     flow = _flow(name="佐藤")
 
-    _confirm(flow, phone_number="080")
-    _confirm(flow, phone_number="08012345678")
+    run(_confirm(flow, phone_number="080"))
+    run(_confirm(flow, phone_number="08012345678"))
 
     # The two the caller gave, rather than the whole dict: the flow keeps other
     # bookkeeping in there too, and this test is about the number and the name.
@@ -81,7 +85,7 @@ def _read_out(pieces: list[str], **state) -> str:
     """Feed *pieces* to _confirm one at a time; return the number it assembled."""
     flow = _flow(name="佐藤", **state)
     for piece in pieces:
-        _confirm(flow, phone_number=piece)
+        run(_confirm(flow, phone_number=piece))
     return flow.state["phone_number"]
 
 
@@ -104,10 +108,10 @@ def test_a_rejected_number_is_not_merged_into_the_next_one():
     """A wrong digit count clears the slate, so the retry starts from nothing."""
     flow = _flow(name="佐藤")
     # Ten digits behind a mobile prefix: wrong, and asked for again.
-    assert _confirm(flow, phone_number="0801234567")["name"] == "number_retry"
+    assert run(_confirm(flow, phone_number="0801234567"))["name"] == "number_retry"
     assert flow.state["phone_number"] == ""
 
-    _confirm(flow, phone_number="080")
-    _confirm(flow, phone_number="12345678")
+    run(_confirm(flow, phone_number="080"))
+    run(_confirm(flow, phone_number="12345678"))
 
     assert flow.state["phone_number"] == "08012345678"

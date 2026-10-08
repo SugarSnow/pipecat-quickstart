@@ -619,16 +619,16 @@ CLOSING_TASK = f"""\
 def reception_node() -> NodeConfig:
     """The node the call starts in: 用件確認 and, in the same breath, 案内 and 断り.
 
-    The greeting is a ``tts_say`` pre-action and the node then waits, for the
-    same reason the read-back does: the wording is fixed, so there is nothing
-    for the LLM to decide, and speaking it directly removes the generation gap
-    the caller used to talk into.
+    The greeting is a fixed line spoken by the bot on connect — see
+    :func:`_say` for why it is not the node's pre-action — and the node then
+    waits. The wording is fixed, so there is nothing for the LLM to decide, and
+    speaking it directly removes the generation gap the caller used to talk
+    into.
     """
     return {
         "name": "reception",
         "role_message": ROLE_MESSAGE + reception_task(offered=False),
         "task_messages": [{"role": "developer", "content": "ご用件を伺ってください。"}],
-        "pre_actions": [{"type": "tts_say", "text": GREETING_LINE}],
         "respond_immediately": False,
         "functions": [start_callback],
     }
@@ -672,14 +672,14 @@ def callback_collect_node() -> NodeConfig:
     }
 
 
-def callback_confirm_node(name: str, phone_number: str) -> NodeConfig:
-    """復唱と確認: read the details back, then wait for the caller to answer.
+def callback_confirm_node() -> NodeConfig:
+    """復唱と確認: wait for the caller to answer the read-back.
 
-    The read-back is a ``tts_say`` pre-action rather than something the LLM
-    writes, and the node does not respond on entry. That is what makes the wait
-    reliable: there is no turn in which the model could both ask "is this right?"
-    and answer its own question. Saying it ourselves fixes the wording too — the
-    digits come from :func:`read_back_line`, not from the model.
+    The read-back itself is spoken by :func:`_confirm` on the way here, and the
+    node does not respond on entry. That is what makes the wait reliable: there
+    is no turn in which the model could both ask "is this right?" and answer its
+    own question. Saying it ourselves fixes the wording too — the digits come
+    from :func:`read_back_line`, not from the model.
     """
     return {
         "name": "callback_confirm",
@@ -687,7 +687,6 @@ def callback_confirm_node(name: str, phone_number: str) -> NodeConfig:
         "task_messages": [
             {"role": "developer", "content": "復唱に対する相手の返事を待ってください。"}
         ],
-        "pre_actions": [{"type": "tts_say", "text": read_back_line(name, phone_number)}],
         "respond_immediately": False,
         "functions": [record_callback, correct_name, correct_phone_number],
     }
@@ -728,16 +727,16 @@ def number_fragment_node() -> NodeConfig:
     """まだ読み上げ途中の番号を、相槌だけ返して待つ。
 
     The caller is mid-number, so the only right answer is "はい" and silence.
-    Said as a fixed line for the same reason as the read-back: the model, left
-    to word this itself, answered "ありがとうございます、その後の番号をお願い
-    します" and talked over the next few digits.
+    :func:`_confirm` says it on the way here, as a fixed line for the same
+    reason as the read-back: the model, left to word this itself, answered
+    "ありがとうございます、その後の番号をお願いします" and talked over the next
+    few digits.
     """
     return {
         "name": "number_fragment",
         "role_message": ROLE_MESSAGE
         + correction_task(detail="phone_number", switchable=False),
         "task_messages": [{"role": "developer", "content": "番号の続きを待ってください。"}],
-        "pre_actions": [{"type": "tts_say", "text": ACKNOWLEDGE_LINE}],
         "respond_immediately": False,
         "functions": [confirm_phone_number],
     }
@@ -746,15 +745,15 @@ def number_fragment_node() -> NodeConfig:
 def number_retry_node() -> NodeConfig:
     """桁数が合わない番号を、復唱せずに聞き直す。
 
-    Same shape as the read-back node — a fixed line, then silence until the
-    caller speaks — because the number must not be read back at all: repeating
-    a number that cannot be right invites a "yes" to something wrong.
+    Same shape as the read-back node — a fixed line said on the way here, then
+    silence until the caller speaks — because the number must not be read back
+    at all: repeating a number that cannot be right invites a "yes" to
+    something wrong.
     """
     return {
         "name": "number_retry",
         "role_message": ROLE_MESSAGE + correction_task(detail="phone_number"),
         "task_messages": [{"role": "developer", "content": "お電話番号をもう一度伺ってください。"}],
-        "pre_actions": [{"type": "tts_say", "text": RE_ASK_NUMBER_LINE}],
         "respond_immediately": False,
         "functions": [confirm_phone_number, correct_name],
     }
@@ -770,7 +769,37 @@ def closing_node() -> NodeConfig:
     }
 
 
-def _confirm(flow_manager: FlowManager, **details: str) -> NodeConfig | None:
+async def _say(flow_manager: FlowManager, line: str) -> None:
+    """Speak a fixed line, without putting it in a node's ``pre_actions``.
+
+    Flows runs a node's pre-actions inside ``_set_node`` and then waits for them
+    to finish before it applies the node — ``_maybe_wait_for_ongoing_actions_to
+    _finish`` waits on the ``ActionFinishedFrame`` that follows the queued
+    speech (``pipecat/flows/actions.py``). An interruption flushes the frames in
+    flight, so that frame never arrives and the wait never ends: the node's
+    ``role_message``, its function list and ``current_node`` are all left
+    unapplied, and the conversation carries on with the previous node's
+    instructions and tools.
+
+    On a call test the caller cut into the read-back to say the name was wrong.
+    The log shows "Setting node: callback_confirm" with no "Successfully set
+    node" after it, and from that point the bot was still running
+    ``callback_collect``: it asked for the phone number again after every name
+    correction, and neither ``record_callback`` nor ``correct_name`` was ever
+    callable.
+
+    Queueing the speech ourselves takes it out of the transition. An
+    interruption then cuts the line short, which is what it should do, and
+    leaves the node alone.
+
+    Args:
+        flow_manager: The flow whose worker should speak.
+        line: The exact words to say.
+    """
+    await flow_manager.worker.queue_frames([TTSSpeakFrame(line)])
+
+
+async def _confirm(flow_manager: FlowManager, **details: str) -> NodeConfig | None:
     """Remember whichever detail was just heard and move to the read-back.
 
     Unless the number cannot be right: a mobile prefix needs 11 digits and
@@ -839,10 +868,12 @@ def _confirm(flow_manager: FlowManager, **details: str) -> NodeConfig | None:
     # being read out, and the bot would answer "はい" and wait for ever.
     if not phone_number:
         logger.info("No number to read back yet; asking for it")
+        await _say(flow_manager, RE_ASK_NUMBER_LINE)
         return number_retry_node()
 
     if is_partial_phone_number(phone_number):
         logger.info(f"Phone number is still coming ({phone_number}); waiting for the rest")
+        await _say(flow_manager, ACKNOWLEDGE_LINE)
         return number_fragment_node()
 
     if not has_expected_digit_count(phone_number):
@@ -850,13 +881,15 @@ def _confirm(flow_manager: FlowManager, **details: str) -> NodeConfig | None:
         # Cleared so the next attempt is assembled from scratch: these digits
         # are known to be wrong, and merging onto them would carry the mistake.
         state["phone_number"] = ""
+        await _say(flow_manager, RE_ASK_NUMBER_LINE)
         return number_retry_node()
 
     logger.info(f"Reading back: {name} / {phone_number}")
     # Each read-back gets its own nudge: a corrected number is read back again,
     # and the caller can just as easily miss their cue the second time.
     state["readback_nudged"] = False
-    return callback_confirm_node(name, phone_number)
+    await _say(flow_manager, read_back_line(name, phone_number))
+    return callback_confirm_node()
 
 
 def _is_rejected_number(state: dict, offered: str) -> bool:
@@ -898,7 +931,7 @@ async def submit_name(flow_manager: FlowManager, name: str) -> ConsolidatedFunct
     # node and the details were never read back again. Treat it as the
     # correction it is.
     logger.info(f"Name corrected after the read-back: {name.strip()}")
-    return None, _confirm(flow_manager, name=name)
+    return None, await _confirm(flow_manager, name=name)
 
 
 @flows_tool_options(cancel_on_interruption=True)
@@ -911,7 +944,7 @@ async def confirm_callback(
         name: 相手のお名前。
         phone_number: 相手の電話番号。数字だけで渡してください。例: 08012345678
     """
-    return None, _confirm(flow_manager, name=name, phone_number=phone_number)
+    return None, await _confirm(flow_manager, name=name, phone_number=phone_number)
 
 
 @flows_tool_options(cancel_on_interruption=True)
@@ -921,7 +954,7 @@ async def confirm_name(flow_manager: FlowManager, name: str) -> ConsolidatedFunc
     Args:
         name: 聞き直したお名前。
     """
-    return None, _confirm(flow_manager, name=name)
+    return None, await _confirm(flow_manager, name=name)
 
 
 @flows_tool_options(cancel_on_interruption=True)
@@ -933,7 +966,7 @@ async def confirm_phone_number(
     Args:
         phone_number: 聞き直した電話番号。数字だけで渡してください。例: 08012345678
     """
-    return None, _confirm(flow_manager, phone_number=phone_number)
+    return None, await _confirm(flow_manager, phone_number=phone_number)
 
 
 @flows_tool_options(cancel_on_interruption=True)
@@ -1149,10 +1182,13 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         logger.info("Client connected")
         # Kick off the conversation. Twilio's WebSocket connection has no RTVI
         # client-ready handshake, so start as soon as the stream connects.
-        # Setting the first node is what speaks the greeting: its tts_say
-        # pre-action runs on the transition. The node does not respond
-        # immediately, so nothing else is said until the caller speaks.
+        #
+        # The greeting is spoken here rather than as the node's pre-action, for
+        # the reason given in _say: a pre-action the caller interrupts leaves
+        # the node unapplied. The node does not respond immediately, so nothing
+        # else is said until the caller speaks.
         await flow_manager.initialize(reception_node())
+        await _say(flow_manager, GREETING_LINE)
 
     @assistant_aggregator.event_handler("on_assistant_turn_stopped")
     async def on_assistant_turn_stopped(aggregator, message):

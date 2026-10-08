@@ -4,7 +4,7 @@
 # spoke before it had finished generating, the VAD broadcast an interruption,
 # and the greeting was cancelled — the bot never said which clinic it was. The
 # fix is two halves, and only audio can see either: the line is now a fixed
-# tts_say (invisible to a text-mode run, which drops bot-tts-text), and the
+# a fixed line (invisible to a text-mode run, which drops bot-tts-text), and the
 # caller is muted from connect until it has been spoken in full (a text-mode
 # turn arrives as an LLMMessagesAppendFrame, which never passes the mute gate
 # this is about).

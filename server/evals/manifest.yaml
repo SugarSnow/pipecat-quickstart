@@ -18,7 +18,7 @@ spawn: "env CALLBACK_LOG_PATH=data/callbacks.eval.jsonl CALL_LOG_PATH=data/calls
 suite:
   # Text mode: the harness reads the LLM's words, never the bot's voice, so the
   # bot is spawned with a TTS that synthesizes nothing. Without this a full run
-  # still sent every tts_say line — the greeting, the read-back, the
+  # still sent every fixed line — the greeting, the read-back, the
   # acknowledgements — to Cartesia for audio no one hears, which is what
   # exhausted the free tier and started failing runs with HTTP 402.
   #
