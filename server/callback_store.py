@@ -147,42 +147,6 @@ def merge_phone_number(collected: str, heard: str) -> str:
     return collected + heard
 
 
-def merge_name(collected: str, heard: str) -> str:
-    """Combine the name collected so far with the next thing heard.
-
-    A caller gives their name the way they say it out loud — "小林" and then
-    "本木です" — and each piece arrives as its own turn. The model then hands
-    over sometimes the new piece and sometimes the whole name, exactly as it
-    does with a phone number, and in one call test it passed only the second
-    piece: the surname was lost and the read-back was wrong. Joining the pieces
-    here makes either choice mean the same thing.
-
-    Unlike digits, a name can be extended at the front (surname heard last), so
-    a piece that contains what we already have — at either end — replaces it.
-
-    Args:
-        collected: The name as it stands for this attempt.
-        heard: What the model just passed in.
-
-    Returns:
-        The name after this piece.
-    """
-    collected = collected.strip()
-    heard = heard.strip()
-
-    if not collected:
-        return heard
-    if not heard:
-        return collected
-    # The whole name, not just the new piece.
-    if heard.startswith(collected) or heard.endswith(collected):
-        return heard
-    # Nothing new in it; keep what we have rather than going backwards.
-    if collected.startswith(heard) or collected.endswith(heard):
-        return collected
-    return collected + heard
-
-
 def save_callback_request(
     name: str,
     phone_number: str,

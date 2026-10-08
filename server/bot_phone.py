@@ -79,7 +79,6 @@ from call_record_store import save_call_record
 from callback_store import (
     has_expected_digit_count,
     is_partial_phone_number,
-    merge_name,
     merge_phone_number,
     phone_digits,
     save_callback_request,
@@ -538,7 +537,7 @@ CALLBACK_TASK = """\
 【折り返しのご依頼を受け付ける】
 まずお名前を聞いてください。お名前を聞けたら、次に電話番号を聞いてください。必ず1つずつ順番に聞き、一度に両方を聞かないでください。
 お名前は名字だけでもかまいません。下のお名前を尋ね直さないでください。
-お名前を聞き取れたら、そのつど submit_name に渡してください。「小林」「本木です」のように分かれて届いたときも、届いたぶんをそのまま渡してください。つなぎ合わせはこちらで行います。
+お名前を聞き取れたら submit_name に渡してください。「小林」「本木です」のように分かれて聞こえたときは、**ここまでに聞き取れたお名前の全体**を渡してください。断片だけを渡すと、前に渡した分は残りません。
 
 【電話番号の聞き取り】
 相手がまだ言い終えていない様子のとき（「ゼロハチゼロの」のように文が途中で切れているとき）は、「はい」とだけ返して続きを待ってください。
@@ -811,16 +810,25 @@ def _confirm(flow_manager: FlowManager, **details: str) -> NodeConfig | None:
         logger.info("The name offered is the one just rejected; staying put")
         return None
 
-    # A number — or a name — given in pieces is assembled here rather than left
-    # to the model, which passes sometimes the new piece and sometimes the whole
-    # value so far. Merging makes the two indistinguishable.
+    # A number given in pieces is assembled here rather than left to the model,
+    # which passes sometimes the new piece and sometimes the whole number so
+    # far. Merging makes the two indistinguishable, and the digit count puts a
+    # ceiling on how wrong it can go.
+    #
+    # A name is not joined, it is replaced. There is no digit count to stop it,
+    # and "小林" followed by "本木" is indistinguishable from "佐藤" followed by
+    # "間違えました、小林" — so joining turned a caller's own correction into
+    # 「佐藤小林様」 and then, over three more attempts to fix it,
+    # 「佐藤小林本木も汽様」. Each attempt made it worse and the caller hung up.
+    # Replacing can drop a surname the model passed in two pieces, but the
+    # read-back shows that at once and one more turn fixes it.
     if "phone_number" in details:
         details["phone_number"] = merge_phone_number(
             state.get("phone_number", ""), details["phone_number"]
         )
         state["rejected_phone_number"] = ""
     if "name" in details:
-        details["name"] = merge_name(state.get("name", ""), details["name"])
+        details["name"] = details["name"].strip()
         state["rejected_name"] = ""
     state.update(details)
     name = state.get("name", "")
@@ -877,13 +885,20 @@ async def submit_name(flow_manager: FlowManager, name: str) -> ConsolidatedFunct
     Args:
         name: いま聞き取れたお名前。
     """
-    # No transition: the node is still collecting. What the caller has given so
-    # far goes back as the result, so the model can see the pieces joined up
-    # and ask only for what is still missing.
-    merged = merge_name(flow_manager.state.get("name", ""), name)
-    flow_manager.state["name"] = merged
-    logger.info(f"Name so far: {merged}")
-    return {"name": merged}, None
+    if flow_manager.current_node == "callback_collect":
+        # Still collecting: no transition, and the name goes back as the result
+        # so the model can see what is held and ask only for what is missing.
+        flow_manager.state["name"] = name.strip()
+        logger.info(f"Name so far: {name.strip()}")
+        return {"name": name.strip()}, None
+
+    # Past the read-back. The model reaches for this function instead of
+    # correct_name — on one call it answered "名前が違ってて、小林本木です" by
+    # calling submit_name, so the correction never went through a correction
+    # node and the details were never read back again. Treat it as the
+    # correction it is.
+    logger.info(f"Name corrected after the read-back: {name.strip()}")
+    return None, _confirm(flow_manager, name=name)
 
 
 @flows_tool_options(cancel_on_interruption=True)
@@ -906,14 +921,6 @@ async def confirm_name(flow_manager: FlowManager, name: str) -> ConsolidatedFunc
     Args:
         name: 聞き直したお名前。
     """
-    # A re-stated name replaces what is held rather than being joined onto it.
-    # Joining is for a name arriving in pieces while it is first being
-    # collected; by the time it is being re-asked the caller is saying the whole
-    # name again. Merging here turned three mis-hearings in a row into
-    # 「林本木小林元木小早市本木」 on a real call — and the bot read every word
-    # of it back. The model also re-asks without calling correct_name, so the
-    # clearing cannot be left to that function alone.
-    flow_manager.state["name"] = ""
     return None, _confirm(flow_manager, name=name)
 
 

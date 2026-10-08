@@ -1,11 +1,16 @@
-"""Getting out of a wrong read-back, and taking a name that arrives in pieces.
+"""Getting out of a wrong read-back, and the name the caller keeps correcting.
 
-Both come from one call test. The caller was read back a wrong name and a wrong
+Both come from call tests. The caller was read back a wrong name and a wrong
 number; when they said the name was wrong while the bot was re-taking the
 number, the node they were in had no function for a name, so the model called
 the one it had — with the number that had just been turned down — and the bot
-read the same wrong number out again. Earlier in the same call the surname had
-been dropped because the name arrived as two turns.
+read the same wrong number out again.
+
+The name is the other half. It arrives in pieces, it arrives again when the
+caller corrects it, and nothing in the value says which — so an attempt to join
+the pieces turned each correction into a longer name (佐藤小林 →
+佐藤小林本木 → 佐藤小林本木も汽) until the caller gave up. A name is replaced,
+and the read-back is what catches a piece the model left out.
 
 Everything here is decided in code, so it is checked here rather than in an
 eval: the model only has to pass on what it heard.
@@ -30,26 +35,24 @@ from bot_phone import (
 )
 
 
-def _flow(**state):
-    """A stand-in for the flow manager: these functions only touch state."""
-    return SimpleNamespace(state=dict(state))
+def _flow(node="callback_collect", **state):
+    """A stand-in for the flow manager: these functions read state and the node."""
+    return SimpleNamespace(state=dict(state), current_node=node)
 
 
 def _names(node):
     return [f.__name__ for f in node["functions"]]
 
 
-# --- a name that arrives in pieces -------------------------------------------
+# --- the name a caller gives, and gives again ------------------------------
 
 
-def test_the_pieces_of_a_name_are_joined():
-    """「小林」「本木です」 — the call test where the surname was lost."""
+def test_the_name_is_taken_as_the_model_passes_it():
     flow = _flow()
 
-    asyncio.run(submit_name(flow, "小林"))
-    asyncio.run(submit_name(flow, "本木"))
+    asyncio.run(submit_name(flow, "佐藤祐希"))
 
-    assert flow.state["name"] == "小林本木"
+    assert flow.state["name"] == "佐藤祐希"
 
 
 def test_submitting_a_name_stays_in_the_node():
@@ -60,32 +63,66 @@ def test_submitting_a_name_stays_in_the_node():
     assert result == {"name": "佐藤"}
 
 
-def test_the_whole_name_again_replaces_the_pieces():
-    """The model's other habit: hand over everything heard so far."""
+def test_a_name_given_again_while_collecting_replaces_the_first():
+    """The caller's own correction, mid-collection.
+
+    「佐藤」「あ、間違えました。小林」 — joining the two made it 「佐藤小林」,
+    and the bot read that back (call test 2026-10-08 11:55).
+    """
     flow = _flow()
 
+    asyncio.run(submit_name(flow, "佐藤"))
     asyncio.run(submit_name(flow, "小林"))
-    asyncio.run(submit_name(flow, "小林本木"))
+
+    assert flow.state["name"] == "小林"
+
+
+def test_a_name_submitted_after_the_read_back_is_a_correction():
+    """The model reaches for submit_name instead of correct_name.
+
+    It answered 「名前が違ってて、小林本木です」 by calling submit_name, so the
+    correction never went through a correction node — and with joining, each
+    attempt to fix the name made it longer: 佐藤小林 → 佐藤小林本木 →
+    佐藤小林本木も汽. The caller hung up.
+    """
+    flow = _flow(node="callback_confirm", name="佐藤小林", phone_number="07015162121")
+
+    _, next_node = asyncio.run(submit_name(flow, "小林本木"))
 
     assert flow.state["name"] == "小林本木"
+    assert next_node["name"] == "callback_confirm"
+    assert next_node["pre_actions"][0]["text"].startswith("小林本木様、")
 
 
-def test_the_name_already_collected_survives_the_read_back_call():
-    """confirm_callback carries a name too, and may carry only the last piece."""
+def test_repeated_attempts_at_one_name_do_not_pile_up():
+    """Whichever function the model uses, the name stays the length of a name."""
+    flow = _flow(node="callback_confirm", name="小林本木", phone_number="07011111212")
+
+    for heard in ["林本木", "小林元木", "小早市本木"]:
+        asyncio.run(submit_name(flow, heard))
+        asyncio.run(confirm_name(flow, heard))
+
+    assert flow.state["name"] == "小早市本木"
+
+
+def test_the_name_in_state_is_replaced_by_the_read_back_call():
+    """confirm_callback carries a name of its own, and it is the one that wins."""
     flow = _flow()
     asyncio.run(submit_name(flow, "小林"))
 
-    node = _confirm(flow, name="本木", phone_number="08012345678")
+    node = _confirm(flow, name="小林本木", phone_number="08012345678")
 
     assert flow.state["name"] == "小林本木"
     assert node["pre_actions"][0]["text"].startswith("小林本木様、")
 
 
-def test_the_name_is_taken_as_given_when_nothing_was_collected():
-    """No submit_name on this call: whatever arrives is the name."""
-    node = _confirm(_flow(), name="佐藤祐希", phone_number="08012345678")
+def test_a_re_stated_name_replaces_the_one_held():
+    """Pieces are joined while collecting; a correction is the whole name."""
+    flow = _flow(name="林本木", phone_number="08012345678")
 
-    assert node["pre_actions"][0]["text"].startswith("佐藤祐希様、")
+    asyncio.run(confirm_name(flow, "小林元木"))
+
+    assert flow.state["name"] == "小林元木"
 
 
 def test_collecting_can_take_a_name_on_its_own():
@@ -276,41 +313,4 @@ def test_fixing_the_name_after_the_number_was_cleared_asks_for_the_number():
     node = _confirm(flow, name="小林本木")
 
     assert node["name"] == "number_retry"
-    assert flow.state["name"] == "小林本木"
-
-
-# --- a name said again, rather than a name said in pieces --------------------
-
-
-def test_a_re_stated_name_replaces_the_one_held():
-    """Pieces are joined while collecting; a correction is the whole name."""
-    flow = _flow(name="林本木", phone_number="08012345678")
-
-    asyncio.run(confirm_name(flow, "小林元木"))
-
-    assert flow.state["name"] == "小林元木"
-
-
-def test_mis_hearings_do_not_pile_up():
-    """The call test: three goes at one name, read back as all three joined.
-
-    「林本木小林元木小早市本木様、お電話番号は…」 — and the caller hung up.
-    The model re-asks for the name without calling correct_name, so each new
-    attempt arrived with the previous one still held.
-    """
-    flow = _flow(name="小林本木", phone_number="07011111212")
-
-    for heard in ["林本木", "小林元木", "小早市本木"]:
-        asyncio.run(confirm_name(flow, heard))
-
-    assert flow.state["name"] == "小早市本木"
-
-
-def test_pieces_are_still_joined_while_collecting():
-    """The replacement is confined to the correction: submit_name still joins."""
-    flow = _flow()
-
-    asyncio.run(submit_name(flow, "小林"))
-    asyncio.run(submit_name(flow, "本木"))
-
     assert flow.state["name"] == "小林本木"

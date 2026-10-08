@@ -8,7 +8,6 @@ import pytest
 from callback_store import (
     expected_digit_count,
     has_expected_digit_count,
-    merge_name,
     merge_phone_number,
     normalize_phone_number,
     phone_digits,
@@ -157,29 +156,76 @@ def test_merge_phone_number(collected, heard, expected):
 
 
 @pytest.mark.parametrize(
-    ("collected", "heard", "expected"),
+    ("phone_number", "expected"),
     [
-        # Nothing yet: whatever arrives is the name.
-        ("", "小林", "小林"),
-        # The surname first, then the given name — the call test's order.
-        ("小林", "本木", "小林本木"),
-        # The whole name again, after the surname.
-        ("小林", "小林本木", "小林本木"),
-        # Only the given name was passed, after the whole name was collected.
-        ("小林本木", "本木", "小林本木"),
-        # The given name first and the surname second: a name grows at the
-        # front as well as the back, which is where digits and names differ.
-        ("本木", "小林本木", "小林本木"),
-        # The same piece twice.
-        ("小林", "小林", "小林"),
-        # Nothing new at all.
-        ("小林本木", "", "小林本木"),
-        # Spaces around a piece are not part of the name.
-        ("小林", " 本木 ", "小林本木"),
+        ("08012345678", 11),  # 携帯
+        ("07012345678", 11),
+        ("09012345678", 11),
+        ("0312345678", 10),  # 固定電話
+        ("0612345678", 10),
+        ("0501234567", 10),  # IP電話
+        ("0120123456", 10),  # フリーダイヤル
     ],
 )
-def test_merge_name(collected, heard, expected):
-    assert merge_name(collected, heard) == expected
+def test_how_many_digits_a_prefix_calls_for(phone_number, expected):
+    assert expected_digit_count(phone_number) == expected
+
+
+@pytest.mark.parametrize(
+    "phone_number",
+    ["08012345678", "09012345678", "0312345678", "0120123456", "080-1234-5678"],
+)
+def test_a_complete_number_passes(phone_number):
+    assert has_expected_digit_count(phone_number)
+
+
+@pytest.mark.parametrize(
+    ("phone_number", "why"),
+    [
+        ("0801234567", "携帯なのに10桁"),
+        ("080123456789", "携帯なのに12桁"),
+        ("031234567", "固定電話なのに9桁"),
+        ("03123456789", "固定電話なのに11桁"),
+        ("", "何も聞き取れていない"),
+    ],
+)
+def test_a_number_that_cannot_be_right_is_rejected(phone_number, why):
+    assert not has_expected_digit_count(phone_number), why
+
+
+def test_the_count_is_of_digits_not_characters():
+    """The caller's grouping is theirs; only the digits decide."""
+    assert has_expected_digit_count("080 1234 5678")
+    assert has_expected_digit_count("（03）1234-5678")
+
+
+# --- assembling a number read out in pieces ---------------------------------
+#
+# The model passes sometimes the new piece and sometimes everything so far; the
+# caller said the same thing either way, so both have to land the same.
+
+
+@pytest.mark.parametrize(
+    ("collected", "heard", "expected"),
+    [
+        # Nothing yet: whatever arrives is the number so far.
+        ("", "080", "080"),
+        # The new piece only.
+        ("080", "1234", "0801234"),
+        ("0801234", "5678", "08012345678"),
+        # Everything so far, repeated.
+        ("080", "0801234", "0801234"),
+        ("0801234", "08012345678", "08012345678"),
+        # The same piece twice — a stutter, not more digits.
+        ("080", "080", "080"),
+        # Nothing new at all.
+        ("08012345678", "", "08012345678"),
+        # Non-digits are dropped on the way in, as everywhere else.
+        ("080", "1234の", "0801234"),
+    ],
+)
+def test_merge_phone_number(collected, heard, expected):
+    assert merge_phone_number(collected, heard) == expected
 
 
 @pytest.mark.parametrize(
