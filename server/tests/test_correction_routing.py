@@ -17,9 +17,9 @@ eval: the model only has to pass on what it heard.
 """
 
 import asyncio
-from types import SimpleNamespace
 
 import pytest
+from conftest import make_flow
 
 import bot_phone
 from bot_phone import (
@@ -36,8 +36,7 @@ from bot_phone import (
 
 
 def _flow(node="callback_collect", **state):
-    """A stand-in for the flow manager: these functions read state and the node."""
-    return SimpleNamespace(state=dict(state), current_node=node)
+    return make_flow(node, **state)
 
 
 def _names(node):
@@ -91,7 +90,7 @@ def test_a_name_submitted_after_the_read_back_is_a_correction():
 
     assert flow.state["name"] == "小林本木"
     assert next_node["name"] == "callback_confirm"
-    assert next_node["pre_actions"][0]["text"].startswith("小林本木様、")
+    assert flow.worker.spoken[-1].startswith("小林本木様、")
 
 
 def test_repeated_attempts_at_one_name_do_not_pile_up():
@@ -110,10 +109,11 @@ def test_the_name_in_state_is_replaced_by_the_read_back_call():
     flow = _flow()
     asyncio.run(submit_name(flow, "小林"))
 
-    node = _confirm(flow, name="小林本木", phone_number="08012345678")
+    node = asyncio.run(_confirm(flow, name="小林本木", phone_number="08012345678"))
 
     assert flow.state["name"] == "小林本木"
-    assert node["pre_actions"][0]["text"].startswith("小林本木様、")
+    assert node["name"] == "callback_confirm"
+    assert flow.worker.spoken[-1].startswith("小林本木様、")
 
 
 def test_a_re_stated_name_replaces_the_one_held():
@@ -142,7 +142,7 @@ def test_a_rejected_number_is_not_read_back_again():
     flow = _flow(name="本木", phone_number="07011111152")
     asyncio.run(correct_phone_number(flow))
 
-    assert _confirm(flow, phone_number="07011111152") is None
+    assert asyncio.run(_confirm(flow, phone_number="07011111152")) is None
     assert flow.state["phone_number"] == ""
 
 
@@ -150,14 +150,14 @@ def test_a_rejected_number_is_recognised_however_it_is_written():
     flow = _flow(name="本木", phone_number="07011111152")
     asyncio.run(correct_phone_number(flow))
 
-    assert _confirm(flow, phone_number="070-1111-1152") is None
+    assert asyncio.run(_confirm(flow, phone_number="070-1111-1152")) is None
 
 
 def test_a_different_number_is_accepted_after_a_rejection():
     flow = _flow(name="本木", phone_number="07011111152")
     asyncio.run(correct_phone_number(flow))
 
-    node = _confirm(flow, phone_number="07015151212")
+    node = asyncio.run(_confirm(flow, phone_number="07015151212"))
 
     assert node["name"] == "callback_confirm"
     assert flow.state["phone_number"] == "07015151212"
@@ -167,7 +167,7 @@ def test_a_rejected_name_is_not_read_back_again():
     flow = _flow(name="本木", phone_number="08012345678")
     asyncio.run(correct_name(flow))
 
-    assert _confirm(flow, name="本木") is None
+    assert asyncio.run(_confirm(flow, name="本木")) is None
     assert flow.state["name"] == ""
 
 
@@ -175,7 +175,7 @@ def test_a_different_name_is_accepted_after_a_rejection():
     flow = _flow(name="本木", phone_number="08012345678")
     asyncio.run(correct_name(flow))
 
-    node = _confirm(flow, name="小林本木")
+    node = asyncio.run(_confirm(flow, name="小林本木"))
 
     assert node["name"] == "callback_confirm"
     assert flow.state["name"] == "小林本木"
@@ -185,13 +185,13 @@ def test_a_rejection_is_forgotten_once_the_detail_is_fixed():
     """Only the latest rejection stands: a caller may correct back again."""
     flow = _flow(name="佐藤", phone_number="08012345678")
     asyncio.run(correct_phone_number(flow))
-    _confirm(flow, phone_number="0312345678")
+    asyncio.run(_confirm(flow, phone_number="0312345678"))
     assert flow.state["rejected_phone_number"] == ""
 
     # "no, the first one was right after all"
     asyncio.run(correct_phone_number(flow))
 
-    assert _confirm(flow, phone_number="08012345678")["name"] == "callback_confirm"
+    assert asyncio.run(_confirm(flow, phone_number="08012345678"))["name"] == "callback_confirm"
 
 
 def test_two_corrections_in_one_turn_land_on_the_name():
@@ -208,7 +208,7 @@ def test_two_corrections_in_one_turn_land_on_the_name():
 
     # The model's two calls, in the order the eval log recorded them.
     _, after_correction = asyncio.run(correct_name(flow))
-    stale = _confirm(flow, phone_number="07011111152")
+    stale = asyncio.run(_confirm(flow, phone_number="07011111152"))
 
     assert after_correction["name"] == "name_correction"
     assert stale is None
@@ -227,7 +227,7 @@ def test_an_empty_value_goes_nowhere(offered):
     asyncio.run(correct_phone_number(flow))
     _, after_correction = asyncio.run(correct_name(flow))
 
-    assert _confirm(flow, phone_number=offered) is None
+    assert asyncio.run(_confirm(flow, phone_number=offered)) is None
     assert after_correction["name"] == "name_correction"
 
 
@@ -266,6 +266,32 @@ ALL_TOOLS = [
 ]
 
 
+ALL_NODES = [
+    bot_phone.reception_node,
+    bot_phone.reception_offered_node,
+    bot_phone.callback_collect_node,
+    bot_phone.callback_confirm_node,
+    bot_phone.name_correction_node,
+    bot_phone.phone_correction_node,
+    bot_phone.number_fragment_node,
+    bot_phone.number_retry_node,
+    bot_phone.closing_node,
+]
+
+
+@pytest.mark.parametrize("build", ALL_NODES)
+def test_no_node_speaks_from_its_own_transition(build):
+    """Fixed lines are queued by the bot, never by a node's pre-actions.
+
+    Flows waits for a tts_say pre-action to finish inside _set_node, and an
+    interruption means it never does: the node's instructions, its functions
+    and current_node are all left unapplied, and the call carries on with the
+    previous node's. A caller cutting into the read-back put the bot back in
+    callback_collect for the rest of the call (2026-10-08 12:14).
+    """
+    assert "pre_actions" not in build()
+
+
 @pytest.mark.parametrize(
     "build",
     [
@@ -298,10 +324,10 @@ def test_the_name_is_read_back_with_the_number_still_held():
     flow = _flow(name="本木", phone_number="08012345678")
     asyncio.run(correct_name(flow))
 
-    node = _confirm(flow, name="小林本木")
+    asyncio.run(_confirm(flow, name="小林本木"))
 
-    assert node["pre_actions"][0]["text"].startswith("小林本木様、お電話番号は")
-    assert "ハチ" in node["pre_actions"][0]["text"]
+    assert flow.worker.spoken[-1].startswith("小林本木様、お電話番号は")
+    assert "ハチ" in flow.worker.spoken[-1]
 
 
 def test_fixing_the_name_after_the_number_was_cleared_asks_for_the_number():
@@ -310,7 +336,7 @@ def test_fixing_the_name_after_the_number_was_cleared_asks_for_the_number():
     asyncio.run(correct_phone_number(flow))
     asyncio.run(correct_name(flow))
 
-    node = _confirm(flow, name="小林本木")
+    node = asyncio.run(_confirm(flow, name="小林本木"))
 
     assert node["name"] == "number_retry"
     assert flow.state["name"] == "小林本木"

@@ -7,8 +7,8 @@ name: callback_saved
 judge: !include judge_text.yaml
 
 turns:
-  # Nothing is asserted about the greeting here. It is a fixed line spoken as a
-  # tts_say pre-action, and a text-mode run cannot see it: the harness drops
+  # Nothing is asserted about the greeting here. It is a fixed line the bot
+  # speaks itself, and a text-mode run cannot see it: the harness drops
   # bot-tts-text unless the bot is really speaking. Its wording is pinned in
   # tests/test_greeting.py, and greeting_not_interrupted_audio covers it being
   # spoken in full over a caller who starts early.
@@ -24,7 +24,7 @@ turns:
 
   # The details enter the flow here, and are compared literally: args is a subset
   # check against the call's own arguments. The read-back that follows is spoken
-  # by the bot as a tts_say pre-action, which a text-mode run cannot observe —
+  # by the bot itself as a fixed line, which a text-mode run cannot observe —
   # its wording is pinned in tests/test_read_back.py.
   - user: "ゼロ八ゼロ一二三四五六七八です"
     expect:
