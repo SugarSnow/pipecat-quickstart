@@ -151,6 +151,7 @@ def save_callback_request(
     name: str,
     phone_number: str,
     *,
+    name_unconfirmed: bool = False,
     path: Path | str | None = None,
     now: datetime | None = None,
 ) -> dict:
@@ -159,15 +160,21 @@ def save_callback_request(
     Args:
         name: The caller's name, as read back and confirmed.
         phone_number: The caller's phone number, as read back and confirmed.
+        name_unconfirmed: True when the name was never confirmed out loud — the
+            bot gave up reading it back and said a person would check it on the
+            callback. Whoever makes that call needs to know not to greet them by
+            a name nobody agreed on.
         path: Where to append. Defaults to :func:`callback_log_path`.
         now: Timestamp to record. Defaults to the current local time.
 
     Returns:
-        The stored record: ``requested_at``, ``name`` and ``phone_number``.
+        The stored record: ``requested_at``, ``name``, ``name_unconfirmed`` and
+        ``phone_number``.
     """
     record = {
         "requested_at": (now or datetime.now()).isoformat(timespec="seconds"),
         "name": name.strip(),
+        "name_unconfirmed": name_unconfirmed,
         "phone_number": normalize_phone_number(phone_number),
     }
 

@@ -126,8 +126,12 @@ ACKNOWLEDGE_LINE = "はい。"
 # the VAD heard the caller, the turn was cancelled, and the bot never gave its
 # name. A fixed line also starts speaking a second sooner, since there is no
 # LLM round trip in front of it.
+# The caller is told an AI is answering, in the greeting and again if the
+# read-back of their name fails twice. Here it is one sentence of its own rather
+# than a clause, so it survives being heard over a poor line.
 GREETING_LINE = (
-    "お電話ありがとうございます。さくら歯科クリニックです。ご用件をお聞かせいただけますか。"
+    "お電話ありがとうございます。さくら歯科クリニックです。"
+    "AIが応対しております。ご用件をお聞かせいただけますか。"
 )
 
 # How long to hold the line after the closing before hanging up.
@@ -137,6 +141,25 @@ CLOSING_SILENCE_SECS = 3.0
 # through 33 seconds of silence there: the caller had not realised a reply was
 # wanted, and the bot had nothing that would make it ask.
 READBACK_NUDGE_LINE = "よろしいでしょうか。"
+
+# Said once the name has been read back twice and turned down twice. The call
+# stops trying to get the name right out loud and hands that job to the person
+# who makes the callback — which is the only part of this that a phone line
+# cannot break. A real call test went five rounds on one name before the caller
+# hung up; this is what bounds it.
+NAME_DEFERRED_LINE = (
+    "恐れ入ります。AIが応対しておりますため、お名前を正しく聞き取れないことがございます。"
+    "お名前は折り返しのお電話で担当者が改めて確認させていただきます。"
+    "お電話番号だけ確認させていただいてよろしいでしょうか。"
+)
+
+# The last resort, if the caller would rather get their name right now. Isolated
+# syllables are the one thing the speech-to-text does not rewrite into kanji, so
+# the reading survives — at the cost of a slower exchange.
+SPELL_NAME_LINE = "恐れ入ります。お名前を一文字ずつ、ゆっくりお願いできますか。"
+
+# How many times the bot will read a name back before handing it to a person.
+MAX_NAME_READBACKS = 2
 
 # How long to wait for that reply. Long enough to be reading a number back off a
 # screen or thinking, short enough that the pause does not become a dead line.
@@ -179,14 +202,21 @@ def read_back_line(name: str, phone_number: str) -> str:
     Spoken by the bot itself rather than written by the LLM, so the wording is
     the same every time and the digits are always read one at a time.
 
+    With no name, only the number is read back. That is the state the call is
+    left in once the name has been given up on: saying "様" with nothing in
+    front of it is worse than not saying it.
+
     Args:
-        name: The caller's name, as heard.
+        name: The caller's name, as heard. Empty to read back the number alone.
         phone_number: The caller's number, as heard.
 
     Returns:
         The read-back, ending in a question.
     """
-    return f"{name}様、お電話番号は{spell_out_digits(phone_number)}、でよろしいでしょうか。"
+    digits = spell_out_digits(phone_number)
+    if not name.strip():
+        return f"お電話番号は{digits}、でよろしいでしょうか。"
+    return f"{name}様、お電話番号は{digits}、でよろしいでしょうか。"
 
 
 def is_closing_utterance(text: str) -> bool:
@@ -603,6 +633,22 @@ def correction_task(*, detail: str, switchable: bool = True) -> str:
     )
 
 
+DEFERRED_TASK = """\
+【お名前の確認を折り返しに回す】
+お名前はすでに2回聞き直しています。もう一度お名前を伺ってはいけません。
+相手が「はい」「お願いします」などと承諾したら、confirm_number_only を呼んでください。
+相手がそれでもいまお名前を伝えたいと言ったときだけ、spell_name を呼んでください。
+関数を呼ばずに、終話の挨拶やお礼、折り返しの約束を言ってはいけません。
+"""
+
+SPELLOUT_TASK = """\
+【お名前を一文字ずつ伺う】
+相手が一文字ずつ言ったお名前を、聞き取れたとおりに confirm_name に渡してください。
+届いた文字をそのまま渡してください。漢字に直してはいけません。「こ」「ば」「や」「し」と届いたなら、渡すのは「こばやし」です。
+まだ言い終えていない様子のときは、「はい」とだけ返して続きを待ってください。言葉を足さないでください。
+復唱はこちらで読み上げるので、あなたは復唱しないでください。
+"""
+
 CLOSING_TASK = f"""\
 【終話】
 「{CLOSING_LINE}」とだけ言ってください。
@@ -759,6 +805,44 @@ def number_retry_node() -> NodeConfig:
     }
 
 
+def name_deferred_node() -> NodeConfig:
+    """お名前は折り返しのときに確認する、と伝えたあとのノード。
+
+    The bot has read the name back twice and been told twice that it is wrong.
+    Trying a third time is what lost a real caller — five rounds, then they hung
+    up. From here the name is a person's job, and the only thing left to settle
+    on the phone is the number.
+    """
+    return {
+        "name": "name_deferred",
+        "role_message": ROLE_MESSAGE + DEFERRED_TASK,
+        "task_messages": [
+            {"role": "developer", "content": "お電話番号だけの確認に進んでください。"}
+        ],
+        "respond_immediately": False,
+        "functions": [confirm_number_only, spell_name],
+    }
+
+
+def name_spellout_node() -> NodeConfig:
+    """お名前を一文字ずつ伺う。
+
+    Taken only when the caller would rather settle their name now. Isolated
+    syllables are the one input the speech-to-text does not rewrite into kanji —
+    a real call shows "も" and "と、き です" arriving as kana — so this is the
+    one path where the reading survives intact.
+    """
+    return {
+        "name": "name_spellout",
+        "role_message": ROLE_MESSAGE + SPELLOUT_TASK,
+        "task_messages": [
+            {"role": "developer", "content": "お名前を一文字ずつ伺ってください。"}
+        ],
+        "respond_immediately": False,
+        "functions": [confirm_name],
+    }
+
+
 def closing_node() -> NodeConfig:
     """終話: say the closing line, and nothing else."""
     return {
@@ -836,8 +920,19 @@ async def _confirm(flow_manager: FlowManager, **details: str) -> NodeConfig | No
         logger.info("The number offered is the one just rejected; staying put")
         return None
     if "name" in details and _is_rejected_name(state, details["name"]):
-        logger.info("The name offered is the one just rejected; staying put")
-        return None
+        # The caller has given back the same name they just turned down. That is
+        # what people do when the spelling was right and the pronunciation was
+        # not — the written name has nothing wrong with it. Reading the very
+        # same thing out again cannot sound any different, so there is nothing
+        # to gain from another round: hand the name over now.
+        #
+        # Staying put here instead left the call with no transition and the
+        # model free to say whatever it liked, which is how an eval run of this
+        # flow ended up with "折り返しご連絡いたしますので、しばらくお待ち
+        # ください" in the middle of a correction.
+        logger.info("The same name again; reading it back cannot sound different")
+        state["name"] = details["name"].strip()
+        return await _defer_the_name(flow_manager)
 
     # A number given in pieces is assembled here rather than left to the model,
     # which passes sometimes the new piece and sometimes the whole number so
@@ -929,8 +1024,13 @@ async def submit_name(flow_manager: FlowManager, name: str) -> ConsolidatedFunct
     # correct_name — on one call it answered "名前が違ってて、小林本木です" by
     # calling submit_name, so the correction never went through a correction
     # node and the details were never read back again. Treat it as the
-    # correction it is.
+    # correction it is, cap included.
     logger.info(f"Name corrected after the read-back: {name.strip()}")
+    if _too_many_name_corrections(flow_manager):
+        # Keep what they just said: unconfirmed is not the same as unknown, and
+        # the latest attempt is the closest anyone got.
+        flow_manager.state["name"] = name.strip()
+        return None, await _defer_the_name(flow_manager)
     return None, await _confirm(flow_manager, name=name)
 
 
@@ -972,11 +1072,13 @@ async def confirm_phone_number(
 @flows_tool_options(cancel_on_interruption=True)
 async def correct_name(flow_manager: FlowManager) -> ConsolidatedFunctionResult:
     """お名前が違うと言われたときに呼んでください。お名前だけを聞き直します。"""
-    logger.info("Caller says the name is wrong; asking for it again")
     # The name just rejected must neither be merged into what comes next nor
     # offered back as the correction.
     flow_manager.state["rejected_name"] = flow_manager.state.get("name", "")
     flow_manager.state["name"] = ""
+    if _too_many_name_corrections(flow_manager):
+        return None, await _defer_the_name(flow_manager)
+    logger.info("Caller says the name is wrong; asking for it again")
     return None, name_correction_node()
 
 
@@ -991,6 +1093,47 @@ async def correct_phone_number(flow_manager: FlowManager) -> ConsolidatedFunctio
     return None, phone_correction_node()
 
 
+def _too_many_name_corrections(flow_manager: FlowManager) -> bool:
+    """Count this correction and say whether the name has had its chances.
+
+    Counted here rather than left to the model, which cannot be relied on to
+    keep a tally across turns — and which, on the call this comes from, simply
+    kept asking. Both routes out of a rejected read-back come through here, so
+    the count is of what the caller did, not of which function the model picked.
+    """
+    corrections = flow_manager.state.get("name_corrections", 0) + 1
+    flow_manager.state["name_corrections"] = corrections
+    logger.info(f"Name correction {corrections} of {MAX_NAME_READBACKS}")
+    return corrections >= MAX_NAME_READBACKS
+
+
+async def _defer_the_name(flow_manager: FlowManager) -> NodeConfig:
+    """Stop reading the name back and hand it to whoever makes the callback."""
+    logger.info("The name has been turned down twice; leaving it to the callback")
+    await _say(flow_manager, NAME_DEFERRED_LINE)
+    return name_deferred_node()
+
+
+@flows_tool_options(cancel_on_interruption=True)
+async def confirm_number_only(flow_manager: FlowManager) -> ConsolidatedFunctionResult:
+    """お名前の確認を折り返しに回すことに相手が承諾したときに呼んでください。"""
+    logger.info("Name left for the callback; reading back the number alone")
+    flow_manager.state["name_unconfirmed"] = True
+    flow_manager.state["readback_nudged"] = False
+    await _say(flow_manager, read_back_line("", flow_manager.state.get("phone_number", "")))
+    return None, callback_confirm_node()
+
+
+@flows_tool_options(cancel_on_interruption=True)
+async def spell_name(flow_manager: FlowManager) -> ConsolidatedFunctionResult:
+    """相手がそれでもいまお名前を伝えたいと言ったときに呼んでください。一文字ずつ伺います。"""
+    logger.info("Caller wants to spell their name out")
+    flow_manager.state["rejected_name"] = flow_manager.state.get("name", "")
+    flow_manager.state["name"] = ""
+    await _say(flow_manager, SPELL_NAME_LINE)
+    return None, name_spellout_node()
+
+
 @flows_tool_options(cancel_on_interruption=True)
 async def record_callback(flow_manager: FlowManager) -> ConsolidatedFunctionResult:
     """復唱に対して相手が肯定したときに呼んでください。折り返しのご依頼を記録します。"""
@@ -998,7 +1141,9 @@ async def record_callback(flow_manager: FlowManager) -> ConsolidatedFunctionResu
     # ones that were read back, so a correction cannot leave a stale name or
     # number in the record — which is what happened when the model passed them.
     record = save_callback_request(
-        flow_manager.state.get("name", ""), flow_manager.state.get("phone_number", "")
+        flow_manager.state.get("name", ""),
+        flow_manager.state.get("phone_number", ""),
+        name_unconfirmed=bool(flow_manager.state.get("name_unconfirmed")),
     )
     logger.info(f"Callback request saved: {record}")
     return {"saved": True}, closing_node()
