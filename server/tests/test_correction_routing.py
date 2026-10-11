@@ -163,12 +163,20 @@ def test_a_different_number_is_accepted_after_a_rejection():
     assert flow.state["phone_number"] == "07015151212"
 
 
-def test_a_rejected_name_is_not_read_back_again():
+def test_the_same_name_again_is_handed_over_rather_than_re_read():
+    """The spelling was never wrong; the pronunciation was.
+
+    A caller who says "違います" and then gives the same name back is correcting
+    how it sounded. Reading the identical text out again cannot sound
+    different, so there is nothing left to try on the phone.
+    """
     flow = _flow(name="本木", phone_number="08012345678")
     asyncio.run(correct_name(flow))
 
-    assert asyncio.run(_confirm(flow, name="本木")) is None
-    assert flow.state["name"] == ""
+    node = asyncio.run(_confirm(flow, name="本木"))
+
+    assert node["name"] == "name_deferred"
+    assert flow.state["name"] == "本木"
 
 
 def test_a_different_name_is_accepted_after_a_rejection():
@@ -257,6 +265,8 @@ def test_a_correction_can_hand_over_to_the_other_detail(node, own, other):
 ALL_TOOLS = [
     "start_callback",
     "submit_name",
+    "confirm_number_only",
+    "spell_name",
     "confirm_callback",
     "confirm_name",
     "confirm_phone_number",
@@ -275,6 +285,8 @@ ALL_NODES = [
     bot_phone.phone_correction_node,
     bot_phone.number_fragment_node,
     bot_phone.number_retry_node,
+    bot_phone.name_deferred_node,
+    bot_phone.name_spellout_node,
     bot_phone.closing_node,
 ]
 
@@ -302,6 +314,8 @@ def test_no_node_speaks_from_its_own_transition(build):
         bot_phone.phone_correction_node,
         bot_phone.number_fragment_node,
         bot_phone.number_retry_node,
+        bot_phone.name_deferred_node,
+        bot_phone.name_spellout_node,
         bot_phone.closing_node,
     ],
 )

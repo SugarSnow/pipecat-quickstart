@@ -21,9 +21,13 @@ user:
 judge: !include judge_audio.yaml
 
 turns:
+  # Long enough for the greeting to finish. It is four sentences now that the
+  # caller is told an AI is answering, which takes about 7.5 seconds at 8 kHz —
+  # at 6000ms this turn landed in the middle of it and the judge was handed the
+  # tail of the greeting instead of the bot's reply.
   - user: "折り返しの連絡をお願いしたいんですけど"
     send_after:
-      delay_ms: 6000
+      delay_ms: 8500
     expect:
       - event: response
         eval: "お名前を尋ねている"

@@ -33,13 +33,26 @@ from pipecat.utils.time import time_now_iso8601
 
 from conftest import make_flow, run
 
-from bot_phone import GREETING_LINE, OpeningUserMuteStrategy, _say, reception_node
+from bot_phone import (
+    GREETING_LINE,
+    NAME_DEFERRED_LINE,
+    OpeningUserMuteStrategy,
+    _say,
+    reception_node,
+)
 
 
 def test_greeting_wording():
     assert GREETING_LINE == (
-        "お電話ありがとうございます。さくら歯科クリニックです。ご用件をお聞かせいただけますか。"
+        "お電話ありがとうございます。さくら歯科クリニックです。"
+        "AIが応対しております。ご用件をお聞かせいただけますか。"
     )
+
+
+def test_the_caller_is_told_an_ai_is_answering():
+    """Said here and again if the name cannot be read back — see NAME_DEFERRED_LINE."""
+    assert "AIが応対しております" in GREETING_LINE
+    assert "AIが応対しております" in NAME_DEFERRED_LINE
 
 
 def test_greeting_is_speakable():

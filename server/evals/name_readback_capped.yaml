@@ -1,0 +1,88 @@
+# Two goes at the name, then it stops trying.
+#
+# From the call that ended worst (2026-10-08 16:10): the bot had the name right
+# in writing the whole time — it said so when asked — but could not pronounce
+# it, because the reading is gone once the speech-to-text settles on kanji.
+# The caller said "名前が違います" five times and hung up.
+#
+# Only the function chain is asserted. The hand-over line and the number-only
+# read-back are lines the bot speaks itself, invisible to a text-mode run;
+# their wording and the record's mark are pinned in
+# tests/test_name_readback_cap.py.
+name: name_readback_capped
+
+judge: !include judge_text.yaml
+
+turns:
+  # Nothing is asserted about the greeting here. It is a fixed line the bot
+  # speaks itself, and a text-mode run cannot see it: the harness drops
+  # bot-tts-text unless the bot is really speaking. Its wording is pinned in
+  # tests/test_greeting.py, and greeting_not_interrupted_audio covers it being
+  # spoken in full over a caller who starts early.
+  - user: "折り返しの連絡をお願いしたいんですけど"
+    expect:
+      - event: response
+        eval: "お名前を尋ねている"
+
+  - user: "小林本木と申します"
+    expect:
+      - event: response
+        eval: "お電話番号を尋ねている"
+
+  - user: "ゼロ八ゼロの一一一一の二二二二です"
+    expect:
+      - event: function_call
+        calls:
+          - name: confirm_callback
+
+  # First correction: asked again, as before.
+  - user: "すみません、名前が違います"
+    send_after:
+      delay_ms: 5000
+    expect:
+      - event: function_call
+        calls:
+          - name: correct_name
+
+  # A different name, so this is the ordinary correction path. Giving the same
+  # name back means the spelling was never wrong, only the sound of it, and the
+  # flow hands it over at once — that shortcut is pinned in
+  # tests/test_correction_routing.py rather than here.
+  - user: "小林元木です"
+    send_after:
+      delay_ms: 5000
+    expect:
+      - event: function_call
+        calls:
+          - name: confirm_name
+
+  # Second correction. This is the turn the scenario exists for: the name is
+  # not asked for a third time.
+  - user: "いえ、名前がまだ違います"
+    send_after:
+      delay_ms: 5000
+    expect:
+      - event: function_call
+        calls:
+          - name: correct_name
+      - event: function_call
+        absent: true
+        within_ms: 4000
+
+  - user: "はい、それでお願いします"
+    send_after:
+      delay_ms: 5000
+    expect:
+      - event: function_call
+        calls:
+          - name: confirm_number_only
+
+  - user: "はい、合っています"
+    send_after:
+      delay_ms: 5000
+    expect:
+      - event: function_call
+        calls:
+          - name: record_callback
+      - event: response
+        text_contains: "さくら歯科クリニックにお電話いただき、ありがとうございました"

@@ -26,9 +26,20 @@ def test_request_is_written_as_one_json_line(tmp_path):
     assert record == {
         "requested_at": "2026-10-02T14:30:05",
         "name": "佐藤祐希",
+        "name_unconfirmed": False,
         "phone_number": "08012345678",
     }
     assert json.loads(log.read_text(encoding="utf-8")) == record
+
+
+def test_a_name_nobody_confirmed_is_marked(tmp_path):
+    """Whoever makes the callback has to know not to use this name out loud."""
+    log = tmp_path / "callbacks.jsonl"
+
+    record = save_callback_request("林本木", "08012345678", name_unconfirmed=True, path=log)
+
+    assert record["name_unconfirmed"] is True
+    assert read_callback_requests(log)[0]["name_unconfirmed"] is True
 
 
 def test_requests_accumulate(tmp_path):

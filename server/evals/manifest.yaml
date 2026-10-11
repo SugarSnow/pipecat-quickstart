@@ -36,6 +36,7 @@ suite:
       - closing_no_reply_after_farewell
       - correction_switches_detail
       - in_scope_answers
+      - name_readback_capped
       - in_scope_unknown_wording
       - out_of_scope_callback_offer
       - out_of_scope_wording
